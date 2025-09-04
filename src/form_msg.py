@@ -4,7 +4,7 @@ from env import InventoryManagementEnv
 task1_msg = (
     "Task1: Do you want to remove anyone from your upstream supplier list?\n"
     "Please consider the lead time and order cost when making decision. State your reason in 1-2 sentences first "
-    "and then provide your action as a list following this format (e.g., [0, 1] for removing agent0 and agent1 as suppliers, [] for doing nothing)\n") 
+    "and then provide your action as a list following this format (e.g., [0, 1] for removing agent0 and agent1 as suppliers, [] for doing nothing)\n")
 task2_msg = (
     "Task2: Do you want to add anyone as your new supplier(s) given other available upstream suppliers in the environment?\n"
     "Please state your reason in 1-2 sentences first "
@@ -45,10 +45,8 @@ gold_rule_msg = (
     "Remember that your upstream has its own lead time, so do not wait until your inventory runs out. "
     "Also, avoid ordering too many units at once. "
     "Try to spread your orders over multiple rounds to prevent the bullwhip effect. "
-    "Anticipate future demand changes and adjust your orders accordingly to maintain a stable inventory level."
-    "You must ensure that your total order cost stays within your current assets."
-    "Overspending will lead to bankruptcy."
-    "Warning: Your initial assets are limited and inventory carrying (and backlog) costs can quickly deplete them and lead to bankruptcy—make prudent, forward-looking ordering decisions. \n\n"
+    "Anticipate future demand changes and adjust your orders accordingly to maintain a stable inventory level. "
+    "Be prudent with cash usage and keep a reasonable buffer; avoid one-shot large orders that may create excessive holding costs.\n\n"
 )
 
 least_lead_time = (
@@ -62,16 +60,17 @@ lowest_order_cost = (
 expected_demand = (
     "Task: What is your estimated demand from downstream in the next round? Provide the answer in brackets (e.g., [10]). \n"
 )
-    
-def generate_msg(im_env: InventoryManagementEnv, shutdown_list: list, recovery_list: list, enable_graph_change: bool, enable_price_change: bool, action_order_dict: dict, 
+
+
+def generate_msg(im_env: InventoryManagementEnv, shutdown_list: list, recovery_list: list, enable_graph_change: bool,
+                 enable_price_change: bool, action_order_dict: dict,
                  past_req_orders: list, stage_state: dict, period: int, stage_id: int, cur_agent_id: int):
-    
     agent_name = f"stage_{stage_id}_agent_{cur_agent_id}"
     message = (
         f"Now this is the round {period}, "
         f"and you are {agent_name} at the stage {stage_id}: {im_env.stage_names[stage_id]} in the supply chain. "
-        )
-    
+    )
+
     for event in im_env.emergent_events[im_env.period]:
         if event == "sudden_shutdown":
             shutdown_agents = []
@@ -101,30 +100,28 @@ def generate_msg(im_env: InventoryManagementEnv, shutdown_list: list, recovery_l
             if dr != 0:
                 down_order.append(f"from agent{down_agent_id}: {dr}")
         down_order = "; ".join(down_order)
-        downstream_order = f"Your downstream order from the agents at stage {stage_id-1} for this round is: {down_order}. "
+        downstream_order = f"Your downstream order from the agents at stage {stage_id - 1} for this round is: {down_order}. "
         message += f"{downstream_order}\n"
-    else: # retailer stage
-        demand_description = get_demand_description(im_env.demand_fn)
-        message += f"{demand_description}\n"
     assets_now = float(im_env.assets[stage_id, cur_agent_id])
-    asset_rule = (
+    asset_hint = (
         f"\n**Available assets this round:** {assets_now:.0f}\n"
-        f"**Rule:** Your total order *cost* must NOT exceed "
-        f"**90 % of your available assets**, otherwise you will run out of cash and shut down.\n"
+        f"Order prudently. Base your orders on lead time, backlog, inventory and recent sales; "
+        f"avoid one-shot large orders and keep a reasonable cash buffer.\n"
     )
-    message += asset_rule
+    message += asset_hint
+
     state_info = message
 
     # message += get_lead_time_task()
     # message += get_order_cost_task()
-    message += get_decision_task(stage=stage_id, im_env=im_env, enable_graph_change=enable_graph_change, enable_price_change=enable_price_change)
+    message += get_decision_task(stage=stage_id, im_env=im_env, enable_graph_change=enable_graph_change,
+                                 enable_price_change=enable_price_change)
     # message += get_expected_demand_task()
 
     return message, state_info
 
 
 def get_lead_time_task():
-
     task_msg = "\nPlease answer the question based on your understanding of the given supply chain network.\n"
     task_msg += least_lead_time
 
@@ -132,25 +129,23 @@ def get_lead_time_task():
 
 
 def get_order_cost_task():
-
     task_msg = "\nPlease answer the question based on your understanding of the given supply chain network.\n"
     task_msg += lowest_order_cost
 
     return task_msg
 
-def get_expected_demand_task():
 
+def get_expected_demand_task():
     task_msg = "\nTask: What is your estimated demand from downstream in the next round? Provide the answer in brackets (e.g., [10]).\n"
 
     return task_msg
 
 
 def get_decision_task(stage: int, im_env, enable_graph_change: bool, enable_price_change: bool):
-
     task_msg = ""
-    num_tasks = 0        
+    num_tasks = 0
 
-    if stage < im_env.num_stages - 1 and enable_graph_change: # Ask for supplier updates if it is allowed or it is not a manufacturer
+    if stage < im_env.num_stages - 1 and enable_graph_change:  # Ask for supplier updates if it is allowed or it is not a manufacturer
         task_msg += f"{task1_msg}\n"
         task_msg += f"{task2_msg}\n"
         num_tasks += 2

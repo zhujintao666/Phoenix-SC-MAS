@@ -13,13 +13,52 @@ from collections import defaultdict
 np.random.seed(0)
 
 env_configs = {
+"msbs3" : {
+        "config_name": "msbs3",
+        "sup_dem_relation_type": "fix",
+        "num_init_suppliers": 1,
+        "num_init_customers": 1,
+        "num_agents_per_stage": 1,
+        "num_periods": 300,
+        "num_stages": 3,
+        "stage_names": ['retailer', 'distributor', 'manufacturer'],
+        "enable_resurrection": True,
+        "enable_regular_reflection_with_resurrection": True,
+        "enable_bankruptcy_reflection": True,
+        "max_bankruptcies": 5,
+        "revive_policy": "fix",#initial_assets_initinv_plus_backlog
+        "revive_assets": 2500,
+        "revive_inventory": 50,
+        "reset_suppliers_on_revive": False,
+        "stop_on_exhausted_resurrections": True,
+        "init_inventory_dist": ("uniform", 10, 15),
+        "price_cost_dist": "uniform",
+        "lead_time_dist": ("constant", 2),
+        "prod_capacity_dist": ("uniform", 10, 20),
+        "demand_fn": ("uniform_demand", 4, 8),
+        "holding_costs_dist": "constant",
+        "backlog_costs_dist": "constant",
+        "profit_rate_dist": ("uniform", 0, 1),
+        "init_assets_dist": ("cost_based",),
+        "init_assets_multiple": 10,
+        "init_inventory_multiplier": 1,
+        "init_assets_multiplier": 3,
+        "llm_agents": [(0,0), (1,0), (2,0)],
+        "enable_graph_change": False,
+        "enable_price_change": False,
+        "state_format": "base",
+        "env_no_backlog": False,
+        "emergent_events": [],
+        "shut_seq": {},
+        "rec_seq": {}
+    },
     "llm_sampling" : {
         "config_name": "llm_sampling",
         "sup_dem_relation_type": "fix",
         "num_init_suppliers": 1,
         "num_init_customers": 1,
         "num_agents_per_stage": 1,
-        "num_periods": 80,
+        "num_periods": 50,
         "num_stages": 4,
         "stage_names": ['retailer', 'wholesaler', 'distributor', 'manufacturer'],
 
@@ -216,6 +255,14 @@ def get_env_configs(env_configs: dict):
         config_name=env_configs["config_name"],
         multiple=multiple  # ← 用配置里的值
     )
+    inv_mul = env_configs.get("init_inventory_multiplier", 1)
+    ass_mul = env_configs.get("init_assets_multiplier", 1.0)
+
+    if inv_mul != 1:
+        init_inventories = (np.asarray(init_inventories, dtype=int) * int(inv_mul)).astype(int).tolist()
+
+    if ass_mul != 1.0:
+        init_assets = (np.asarray(init_assets, dtype=float) * float(ass_mul)).astype(float)
 
     # profit_rates = \
     #     generate_profit_rates(dist=env_configs["profit_rate_dist"], num_data=num_total_agents, config_name=env_configs["config_name"])
@@ -262,7 +309,18 @@ def get_env_configs(env_configs: dict):
         "enable_price_change": enable_price_change, 
         "emergent_events": emergent_events,
         "shut_seq": shut_seq,
-        "rec_seq": rec_seq,  
+        "rec_seq": rec_seq,
+        "enable_resurrection": env_configs.get("enable_resurrection", False),
+        "max_bankruptcies": env_configs.get("max_bankruptcies", 5),
+        "revive_policy": env_configs.get("revive_policy", "initial_assets_initinv_plus_backlog"),
+        "reset_suppliers_on_revive": env_configs.get("reset_suppliers_on_revive", False),
+        "stop_on_exhausted_resurrections": env_configs.get("stop_on_exhausted_resurrections", True),
+        "revive_assets": env_configs.get("revive_assets", 1000.0),
+        "revive_inventory": env_configs.get("revive_inventory", 50),
+        "enable_regular_reflection_with_resurrection": env_configs.get(
+            "enable_regular_reflection_with_resurrection", False
+        ),
+        "enable_bankruptcy_reflection": env_configs.get("enable_bankruptcy_reflection", True),
     }
     
 

@@ -2,7 +2,6 @@ import os
 import sys
 import numpy as np
 from tqdm.auto import tqdm
-from autogen import ConversableAgent
 
 sys.path.append('src')
 
@@ -12,14 +11,15 @@ from llm_config import llm_config_list
 import utils
 from mas_model import create_agents, run_simulation
 from utils import get_demand_description, clear_dir
+from autogen import ConversableAgent
 
-
-np.random.seed(42)
+np.random.seed(30)
 DRAW_FIGS = False
-NUM_EPISODES = 25
-ENV_NAME = "llm_sampling"
-ENABLE_MEMORY = True
+NUM_EPISODES = 10
+ENV_NAME = "msbs3"
 USE_RANDOM_ENV_SEED = True
+enable_memory = True
+enable_knn_suggest = False
 
 if not DRAW_FIGS:
     utils.visualize_state = lambda *args, **kwargs: None
@@ -50,7 +50,7 @@ def tune_llm_sampling(stage_agents):
         cfg = getattr(ag, "llm_config", None)
         if not isinstance(cfg, dict):
             continue
-        cfg.setdefault("temperature", 0.2)
+        cfg.setdefault("temperature", 0.1)
         cfg.setdefault("max_retries", 2)
         ag.llm_config = cfg
 
@@ -89,10 +89,23 @@ for r in tqdm(range(NUM_EPISODES), desc="Episodes"):
         config_name=config_name,
         round=r,
         run_tag=f"{run_id}-ep{r:03d}",
-        enable_memory=True,
-        enable_knn_suggest=False,
-        plot_after=True,  
-        return_meta=False
+        enable_memory=enable_memory,
+        enable_knn_suggest=enable_knn_suggest,
+        plot_after=True,
+        stop_on_first_bankruptcy=False,
+        enable_resurrection=env_config_i["enable_resurrection"],
+        max_bankruptcies=env_config_i["max_bankruptcies"],
+        revive_policy=env_config_i["revive_policy"],
+        reset_suppliers_on_revive=env_config_i["reset_suppliers_on_revive"],
+        stop_on_exhausted_resurrections=env_config_i["stop_on_exhausted_resurrections"],
+        revive_assets=env_config_i["revive_assets"],
+        revive_inventory=env_config_i["revive_inventory"],
+        enable_regular_reflection_with_resurrection=env_config_i.get(
+            "enable_regular_reflection_with_resurrection", False
+        ),
+        enable_bankruptcy_reflection=env_config_i.get(
+            "enable_bankruptcy_reflection", True
+        )
     )
 
     rewards.append(float(reward))
@@ -108,7 +121,8 @@ print(f"Standard Deviation of Episode Reward: {std_reward}")
 
 try:
     with open(os.path.join(run_dir, "summary.txt"), "w", encoding="utf-8") as f:
-        f.write(f"ENABLE_MEMORY = {ENABLE_MEMORY}\n")
+        f.write(f"enable_memory = {enable_memory}\n")
+        f.write(f"enable_knn_suggest = {enable_knn_suggest}\n")
         f.write(f"NUM_EPISODES  = {NUM_EPISODES}\n")
         f.write(f"USE_RANDOM_ENV_SEED = {USE_RANDOM_ENV_SEED}\n")
         f.write(f"Rewards: {rewards}\n")
