@@ -252,30 +252,75 @@ class InventoryManagementEnv(MultiAgentEnv):
         self.arriving_orders[:, :, :, t] = (self.orders[:, :, :, t] * fulfilled_rates).astype(int)
 
         # sales: for stages > 0 sales equal downstream arrivals; retailer bounded by demand/inventory/capacity
-        cum_fulfilled_orders = np.sum(self.arriving_orders, axis=1)  # shape: (stage, agent, time)
-        self.sales[1:, :, t] = cum_fulfilled_orders[:-1, :, t]
+        # === 分清“发货(出库)”与“到货(销售/成本确认)” ===
+        M, A = self.num_stages, self.num_agents_per_stage
+
+        # 1) 本期发货量（dispatch）：用于库存与 backlog 结转（上游 s>=1 才对下游发货）
+        dispatched_out = np.zeros((M, A), dtype=int)
+        for s in range(1, M):
+            for a in range(A):
+                # 本期 t 从 (s,a) 发往下游阶段 s-1 的所有量（按你上面比例分配后的整数结果）
+                dispatched_out[s, a] = int(self.arriving_orders[s - 1, :, a, t].sum())
+
+        # 2) 上游销售（收入口径）：按“下游本期收到 = 上游在 t-lt 时发出的货”
+        sales_up = np.zeros((M, A), dtype=int)
+        for s in range(1, M):
+            for a in range(A):
+                total_recv = 0
+                for i in range(A):
+                    lt = int(self.lead_times[s - 1][i][a])
+                    idx = t if lt <= 0 else t - lt
+                    if idx >= 0:
+                        total_recv += int(self.arriving_orders[s - 1, i, a, idx])
+                sales_up[s, a] = total_recv
+
+        # 3) 销售写回：零售商按需卖，上游按“到货”确认收入
         self.sales[0, :, t] = np.minimum(
             np.minimum(self.backlogs[0, :, t - 1] + self.demands[t], current_inventories[0]),
             self.prod_capacities[0]
         )
+        self.sales[1:, :, t] = sales_up[1:, :]
 
-        # backlog dynamics
-        self.backlogs[1:, :, t] = self.backlogs[1:, :, t - 1] + cum_req_orders[:-1] - self.sales[1:, :, t]
-        self.backlogs[0, :, t] = self.backlogs[0, :, t - 1] + self.demands[t] - self.sales[0, :, t]
+        # 4) backlog 结转：用“本期发货量（dispatch）”冲减（不是 sales）
+        #    s=0：外部需求 - 当期销售
+        self.backlogs[0, :, t] = np.maximum(
+            0,
+            self.backlogs[0, :, t - 1] + self.demands[t] - self.sales[0, :, t]
+        )
+        #    s>=1：下游本期请求 - 我本期实际发走
+        #    cum_req_orders[s] 是本期下游对阶段 s 的总请求
+        self.backlogs[1:, :, t] = np.maximum(
+            0,
+            self.backlogs[1:, :, t - 1] + cum_req_orders[1:] - dispatched_out[1:, :]
+        )
 
-        # end-of-period inventory
-        self.inventories[:, :, t] = current_inventories - self.sales[:, :, t]
+        # 5) 期末库存：零售商扣“当期销售”，上游扣“本期发货”
+        inv_end = current_inventories.copy()
+        inv_end[0] -= self.sales[0, :, t]
+        for s in range(1, M):
+            inv_end[s, :] -= dispatched_out[s, :]
+        # 数值保护（如仍出现负值，说明上游放货超库存/产能，需回查上游 fulfilled 分配与取整）
+        self.inventories[:, :, t] = np.maximum(0, inv_end)
 
-        # costs/profit (holding/backlog charge on stock levels)
-        order_costs_mat = np.repeat(self.order_costs[:, np.newaxis, :], self.num_agents_per_stage, axis=1)
-        order_costs_mat = order_costs_mat * self.arriving_orders[:, :, :, t]
-        order_costs_now = np.sum(order_costs_mat, axis=2)
+        # 6) 采购成本（买方收到时确认）：按“本期到货 = 上游在 t-lt 发的货”
+        order_costs_now = np.zeros((M, A), dtype=int)
+        for m in range(M):  # 买方阶段（下游索引）
+            for i in range(A):  # 买方 agent
+                total_cost = 0
+                for j in range(A):  # 对应上游供应商
+                    lt = int(self.lead_times[m][i][j])
+                    idx = t if lt <= 0 else t - lt
+                    if idx >= 0:
+                        qty = int(self.arriving_orders[m, i, j, idx])
+                        total_cost += qty * int(self.order_costs[m][j])
+                order_costs_now[m, i] = total_cost
 
+        # 7) 利润
         self.profits[:, :, t] = (
-            self.sale_prices * self.sales[:, :, t]
-            - order_costs_now
-            - self.backlog_costs * self.backlogs[:, :, t]
-            - self.holding_costs * self.inventories[:, :, t]
+                self.sale_prices * self.sales[:, :, t]
+                - order_costs_now
+                - self.backlog_costs * self.backlogs[:, :, t]
+                - self.holding_costs * self.inventories[:, :, t]
         )
         self.total_profits[t] = int(np.sum(self.profits[:, :, t]))
 
@@ -465,7 +510,10 @@ class InventoryManagementEnv(MultiAgentEnv):
         print(f"Re-open stage_{stage_id}_agent_{agent_id}.")
         self.running_agents[stage_id][agent_id] = 1
         self.shutdown_agents_set.discard(f"stage_{stage_id}_agent_{agent_id}")
-
+        if stage_id != 0:
+            for down_agent_id in range(self.num_agents_per_stage):
+                self.supply_relations[stage_id - 1][down_agent_id][agent_id] = \
+                    self.init_supply_relations[stage_id - 1][down_agent_id][agent_id]
     def create_demand_surge(self):
         if self.demand_fn.dist == "constant_demand":
             self.demand_fn.mean *= 2

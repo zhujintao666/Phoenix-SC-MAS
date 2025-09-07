@@ -19,7 +19,7 @@ NUM_EPISODES = 10
 ENV_NAME = "msbs3"
 USE_RANDOM_ENV_SEED = True
 enable_memory = True
-enable_knn_suggest = False
+enable_knn_suggest = True
 
 if not DRAW_FIGS:
     utils.visualize_state = lambda *args, **kwargs: None

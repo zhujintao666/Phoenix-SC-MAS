@@ -10,43 +10,35 @@ task2_msg = (
     "Please state your reason in 1-2 sentences first "
     "and then provide your action as a list following this format (e.g., [2, 3] for adding agent2 and agent3 as suppliers, [] for doing nothing)\n"
 )
-# Please estimate the future downstream demand based on the recent sales, and consider the lead time and order cost when making decision. 
 task3_msg = (
-    "Task3: What is the order quantity you would like to place with each supplier for this round? "
+    "Task3: Decide the order quantity to place with each supplier for THIS ROUND only. "
     "You can only place orders to your upstream suppliers.\n"
-    "Please first explain your reason in 1-2 sentences, **then output the order list strictly** in the "
-    "Output STRICTLY in this JSON form (values are placeholders):\n\n"
-    '  {"orders":[q1,q2,...,qN]}\n\n'
+    "Return EXACTLY ONE JSON object on a single line (no extra text):\n"
+    '  {"orders":[q1,q2,...,qN], "why":"<1-2 short sentences>"}\n'
     "Requirements:\n"
     "- q1..qN are non-negative integers.\n"
-    "- Do NOT copy example numbers; choose values based on current demand, backlog, inventory, lead time and cost.\n"
-    "- If you decide to order zero, still return a full-length array with all zeros (e.g., {\"orders\":[0,0,...,0]}), NOT an empty list.\n"
+    "- The array length MUST be N (your upstream supplier count, in fixed order).\n"
+    "- If you choose to order zero, still return full-length zeros, e.g. {\"orders\":[0,0,...,0]}.\n"
+    "- Base values on demand, backlog, inventory, lead time, inbound and cost; do NOT copy example numbers.\n"
 )
-
 task4_msg = (
     "Task4: What is the price you would like to set for the products?"
     "Please state your reason in 1-2 sentences first "
     "and then provide your action as a list following this format (e.g., [8])"
 )
 gold_rule_msg = (
-    "\n\n"
-    "Please follow the output format strictly. \n"
-    "Golden rule of this game: Open orders should always equal to \"expected downstream orders + backlog\". "
-    "If open orders are larger than this, the inventory will rise (once the open orders arrive). "
-    "If open orders are smaller than this, the backlog will not go down and it may even rise. "
-    "The price should cover both the production cost and order cost. "
-    "If price is larger than the sum of two costs, there is a profit. "
-    "Otherwise there is a loss. "
-    "You can only place order to your upstream suppliers. "
-    "Please consider the lead time and place your order in advance. "
-    "Please consider the lead time and order costs when selecting your suppliers. "
-    "Please consider the recent sales when deciding the order quantity. "
-    "Please consider the order cost and the pricing of competitors when setting price. "
-    "Remember that your upstream has its own lead time, so do not wait until your inventory runs out. "
-    "Also, avoid ordering too many units at once. "
-    "Try to spread your orders over multiple rounds to prevent the bullwhip effect. "
-    "Anticipate future demand changes and adjust your orders accordingly to maintain a stable inventory level. "
-    "Be prudent with cash usage and keep a reasonable buffer; avoid one-shot large orders that may create excessive holding costs.\n\n"
+    "\n\nPlease follow the output format strictly.\n"
+    "Golden rule (horizon-based): Over the effective lead time L, target\n"
+    "  NewOrders ≈ clamp_{≥0}\n"
+    "    ( ExpectedDemand_over_next_L + CurrentBacklog\n"
+    "      - OnHandInventory - InboundOverNext_L ).\n"
+    "Notes:\n"
+    "- ExpectedDemand_over_next_L can be estimated from recent sales.\n"
+    "- InboundOverNext_L equals the deliveries scheduled to arrive within L (use the arrivals window).\n"
+    "- Spread orders across rounds to avoid bullwhip; do NOT one-shot large orders.\n"
+    "- Respect constraints: production capacity, supplier capacity, and available assets (keep a cash buffer).\n"
+    "- Price (if applicable) should cover upstream order cost and production cost to avoid losses.\n"
+    "- Only order from available upstream suppliers; respect lead times and order costs when selecting suppliers.\n\n"
 )
 
 least_lead_time = (

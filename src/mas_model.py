@@ -61,7 +61,8 @@ def create_agents(stage_names: List[str], num_agents_per_stage: int, llm_config)
             name=f"{stage_name.capitalize()}Agent_0",
             system_message=(
                 f"You play a crucial role in a {num_stages}-stage supply chain as the stage {stage + 1} ({stage_name}). "
-                "Your goal is to minimize the total cost by managing inventory and orders effectively."
+                "Objective: maximize total profit (equivalently, minimize total cost) while meeting downstream demand and avoiding stockouts."
+                "Always forecast downstream demand over the next L periods and place non-negative integer orders accordingly."
             ),
             llm_config=safe_llm_config,
             code_execution_config=False,
@@ -283,30 +284,27 @@ def run_simulation(
         - assets := target_assets
         - inventory := target_inventory (at end-of-period); backlog := 0
         - running_agents := 1
-        - do NOT reset supplier links by default to avoid topology shock
+        - if reset_suppliers: restore downstream customers' supplier links to initial graph
         Return (new_assets, new_inventory) for logging.
         """
-        # assets
         try:
             env.assets[s, a] = float(target_assets)
         except Exception:
             pass
 
-        # inventory / backlog：尽量同时更新 'inventory' 或带时间轴的 'inventories'
         new_inv = None
+        try:
+            env.inventories[s, a, t_end] = int(target_inventory)
+            new_inv = int(env.inventories[s, a, t_end])
+        except Exception:
+            pass
         try:
             env.inventory[s, a] = int(target_inventory)
             new_inv = int(env.inventory[s, a])
         except Exception:
             pass
         try:
-            env.backlogs[s, a, t_end] = 0  # ← 关键补丁
-        except Exception:
-            pass
-
-        try:
-            env.inventories[s, a, t_end] = int(target_inventory)
-            new_inv = int(env.inventories[s, a, t_end])
+            env.backlogs[s, a, t_end] = 0
         except Exception:
             pass
 
@@ -316,16 +314,42 @@ def run_simulation(
             pass
 
         if reset_suppliers:
+            restored = 0
+            try:
+                if hasattr(env, "create_recovery_event"):
+                    env.create_recovery_event(s, a)
+                    restored = -1
+                else:
+                    raise AttributeError
+            except Exception:
+                try:
+                    if s != 0:
+                        for down_agent_id in range(env.num_agents_per_stage):
+                            before = int(env.supply_relations[s - 1][down_agent_id][a])
+                            want = int(env.init_supply_relations[s - 1][down_agent_id][a])
+                            if before != want:
+                                env.supply_relations[s - 1][down_agent_id][a] = want
+                                restored += 1
+                except Exception:
+                    pass
+
             try:
                 if hasattr(env, "sc_graph") and hasattr(env.sc_graph, "ensure_min_suppliers"):
                     env.sc_graph.ensure_min_suppliers(s, a)
             except Exception:
                 pass
 
+            if restored >= 0:
+                try:
+                    print(f"[RESURRECT] restored {restored} downstream links for stage_{s}_agent_{a}")
+                except Exception:
+                    pass
+
         try:
             new_assets = float(env.assets[s, a])
         except Exception:
             new_assets = float("nan")
+
         if new_inv is None:
             try:
                 _sd = env.parse_state()
@@ -624,6 +648,7 @@ def run_simulation(
                         "Operational reminders:",
                         "- Consider lead time: plan for demand over next L periods, not only current demand.",
                         "- If backlog exists, clear it gradually across L; avoid one-shot overshoot.",
+                        "- Base orders on a forecast of downstream demand (sum of downstream orders for non-retailer stages, customer demand for retailer) over the next L periods; then add backlog-clearance and subtract on-hand inventory and inbound."
                     ]
                     prefix_parts = ["You MUST use the following context when deciding orders."]
                     prefix_parts += lead_card + lead_orders + mem_hint_lines + rule_lines + op_hints
@@ -807,9 +832,15 @@ def run_simulation(
                 revenue = sale_price * sales_t
 
                 try:
-                    unit_costs = np.asarray(im_env.order_costs[s, :], dtype=float)  # (X,)
-                    arrivals = np.asarray(im_env.arriving_orders[s, a, :, t_end], dtype=int)  # (X,)
-                    order_cost = float(np.sum(unit_costs * arrivals))
+                    total_cost = 0.0
+                    A = im_env.num_agents_per_stage
+                    for j in range(A):  # j: 上游供应商 agent
+                        lt = int(im_env.lead_times[s][a][j])
+                        idx = t_end if lt <= 0 else t_end - lt
+                        if idx >= 0:  # 只有当“发货时刻”落在时间轴内，才算作本期收到
+                            qty_recv_now = int(im_env.arriving_orders[s, a, j, idx])
+                            total_cost += float(im_env.order_costs[s, j]) * qty_recv_now
+                    order_cost = float(total_cost)
                 except Exception:
                     order_cost = 0.0
 

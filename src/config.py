@@ -29,7 +29,7 @@ env_configs = {
         "revive_policy": "fix",#initial_assets_initinv_plus_backlog
         "revive_assets": 2500,
         "revive_inventory": 50,
-        "reset_suppliers_on_revive": False,
+        "reset_suppliers_on_revive": True,
         "stop_on_exhausted_resurrections": True,
         "init_inventory_dist": ("uniform", 10, 15),
         "price_cost_dist": "uniform",
