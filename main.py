@@ -19,7 +19,7 @@ NUM_EPISODES = 10
 ENV_NAME = "msbs3"
 USE_RANDOM_ENV_SEED = True
 enable_memory = True
-enable_knn_suggest = True
+enable_knn_suggest = False
 
 if not DRAW_FIGS:
     utils.visualize_state = lambda *args, **kwargs: None
@@ -92,7 +92,7 @@ for r in tqdm(range(NUM_EPISODES), desc="Episodes"):
         enable_memory=enable_memory,
         enable_knn_suggest=enable_knn_suggest,
         plot_after=True,
-        stop_on_first_bankruptcy=False,
+        stop_on_first_bankruptcy=True,
         enable_resurrection=env_config_i["enable_resurrection"],
         max_bankruptcies=env_config_i["max_bankruptcies"],
         revive_policy=env_config_i["revive_policy"],

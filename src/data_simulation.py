@@ -207,16 +207,26 @@ def generate_init_inventories(dist: tuple, num_data: int, config_name: str="test
 class Demand_fn:
 
     def __init__(self, dist: tuple):
+        # 现有校验保留，同时补上 sin/cos 的参数校验
         assert len(dist) == 3 if dist[0] == 'normal_demand' else 1, "Please provide the mean and std for the normal distribution."
         assert len(dist) == 3 if dist[0] == 'uniform_demand' else 1, "Please provide the lower bound and upper bound for the uniform distribution."
         assert len(dist) == 2 if dist[0] == 'constant_demand' else 1, "Please provide the mean value for the constant distribution."
         assert len(dist) == 2 if "poisson_demand" in dist[0] else 1, "Please provide the mean value for the poisson distribution."
-        
+        # ↓ 新增：sin/cos 需要 6 个参数
+        assert len(dist) == 6 if dist[0] in ('sin_demand', 'cos_demand') else 1, \
+            "Please provide (mean, amplitude, period, phase, noise_std) for sine/cosine demand."
+
         self.lb = None
         self.ub = None
         self.mean = None
         self.std = None
         self.dist = dist[0]
+
+        # 通用：用到 sin/cos 的参数
+        self.amp = None
+        self.period_len = None   # 避免和 self.period 混淆
+        self.phase = 0.0
+        self.noise_std = 0.0
 
         if self.dist == 'uniform_demand':
             self.lb = dist[1]
@@ -228,24 +238,57 @@ class Demand_fn:
             self.mean = dist[1]
         elif "poisson_demand" in self.dist:
             self.mean = dist[1]
+        # ↓ 新增：sin / cos
+        elif self.dist == 'sin_demand':
+            # ("sin_demand", mean, amplitude, period, phase, noise_std)
+            self.mean = float(dist[1])
+            self.amp = float(dist[2])
+            self.period_len = max(1, int(dist[3]))  # 至少 1，避免除零
+            self.phase = float(dist[4])
+            self.noise_std = float(dist[5])
+        elif self.dist == 'cos_demand':
+            # ("cos_demand", mean, amplitude, period, phase, noise_std)
+            self.mean = float(dist[1])
+            self.amp = float(dist[2])
+            self.period_len = max(1, int(dist[3]))
+            self.phase = float(dist[4])
+            self.noise_std = float(dist[5])
+        else:
+            raise ValueError(f"Unsupported demand_fn: {self.dist}")
 
+        # 环境通常会在每期设置/更新这个 period
         self.period = -1
 
     def constant_demand(self):
-        return self.mean
+        return int(self.mean)
 
     def uniform_demand(self):
-        return np.random.randint(low=self.lb, high=self.ub)
-    
+        # 注意：np.random.randint 上界是开区间，如要包含上界可用 high=self.ub+1
+        return int(np.random.randint(low=self.lb, high=self.ub))
+
     def normal_demand(self):
-        return np.random.normal(self.mean, self.std)
-    
+        return int(np.random.normal(self.mean, self.std))
+
     def poisson_demand(self):
-        return np.random.poisson(self.mean)
-    
+        return int(np.random.poisson(self.mean))
+
     def dyn_poisson_demand(self):
-        return np.random.poisson(self.mean + 2*self.period)
-        
+        return int(np.random.poisson(self.mean + 2*self.period))
+
+    # ==== 新增：正弦/余弦需求（使用 self.period，不在这里自增，保持和原逻辑一致）====
+    def sin_demand(self):
+        # base = mean + amp * sin(2π*(t+phase)/period_len) + 噪声
+        val = self.mean + self.amp * np.sin(2*np.pi * (self.period + self.phase) / self.period_len)
+        if self.noise_std > 0:
+            val += np.random.normal(0.0, self.noise_std)
+        return max(0, int(round(val)))
+
+    def cos_demand(self):
+        val = self.mean + self.amp * np.cos(2*np.pi * (self.period + self.phase) / self.period_len)
+        if self.noise_std > 0:
+            val += np.random.normal(0.0, self.noise_std)
+        return max(0, int(round(val)))
+
     def __call__(self, t):
         self.period = t
         if self.dist == 'constant_demand':
@@ -258,6 +301,10 @@ class Demand_fn:
             return self.poisson_demand()
         elif self.dist == "dyn_poisson_demand":
             return self.dyn_poisson_demand()
+        elif self.dist == 'sin_demand':
+            return self.sin_demand()
+        elif self.dist == 'cos_demand':
+            return self.cos_demand()
         else:
             raise AssertionError("Demand function is not implemented.")
         

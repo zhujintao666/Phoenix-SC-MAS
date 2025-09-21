@@ -277,28 +277,72 @@ def get_base_description(state, past_req_orders):
     )
 
 
-def get_demand_description(demand_fn: Callable) -> str:
-    
-    if demand_fn.dist == "constant_demand":
-        mean = demand_fn.mean
-        return f"The expected demand at the retailer (stage 0) is a constant {mean} units for all rounds."
-    elif demand_fn.dist == "uniform_demand":
-        lb = demand_fn.lb
-        ub = demand_fn.ub
-        return f"The expected demand at the retailer (stage 0) is a discrete uniform distribution U{lb, ub} for all rounds."
-    elif demand_fn.dist == "seasonal_demand":
-        return f"The expected demand at the retailer (stage 0) is a discrete uniform distribution U{0, 4} for the first 4 rounds, " \
-            "and a discrete uniform distribution U{5, 8} for the last 8 rounds."
-    elif demand_fn.dist == "normal_demand":
-        mu = demand_fn.mean
-        std = demand_fn.std
-        return f"The expected demand at the retailer (stage 0) is a normal distribution N({mu}, {std}), " \
-            "truncated at 0, for all 12 rounds."
-    elif demand_fn.dist == "dyn_poisson_demand":
-        mean = demand_fn.mean
-        return f"The expected demand at the retailer (stage 0) is a poisson distribution P(lambda={mean}), and the lambda is increasingly bigger."
-    else:
-        raise KeyError(f"Error: {demand_fn} not implemented.")
+def get_demand_description(demand_fn):
+    """
+    支持三种输入：
+    1) 字符串: 'uniform_demand' / 'sin_demand' ...
+    2) 元组: ('sin_demand', mean, amp, period, phase, noise_std) 等
+    3) Demand_fn 实例：data_simulation.Demand_fn(...)
+    """
+    # 3) 先处理对象实例
+    try:
+        from data_simulation import Demand_fn as _DF
+    except Exception:
+        _DF = None
+
+    if _DF is not None and isinstance(demand_fn, _DF):
+        name = demand_fn.dist
+        if name == "uniform_demand":
+            return f"uniform_demand(lb={demand_fn.lb}, ub={demand_fn.ub})"
+        if name == "normal_demand":
+            return f"normal_demand(mean={demand_fn.mean}, std={demand_fn.std})"
+        if name == "constant_demand":
+            return f"constant_demand(mean={demand_fn.mean})"
+        if name == "poisson_demand":
+            return f"poisson_demand(mean={demand_fn.mean})"
+        if name == "dyn_poisson_demand":
+            return f"dyn_poisson_demand(base_mean={demand_fn.mean})"
+        if name == "sin_demand":
+            return (f"sin_demand(mean={demand_fn.mean}, amplitude={demand_fn.amp}, "
+                    f"period={demand_fn.period_len}, phase={demand_fn.phase}, "
+                    f"noise_std={demand_fn.noise_std})")
+        if name == "cos_demand":
+            return (f"cos_demand(mean={demand_fn.mean}, amplitude={demand_fn.amp}, "
+                    f"period={demand_fn.period_len}, phase={demand_fn.phase}, "
+                    f"noise_std={demand_fn.noise_std})")
+        raise KeyError(f"Error: {name} not implemented.")
+
+    # 1) 字符串
+    if isinstance(demand_fn, str):
+        return demand_fn
+
+    # 2) 元组
+    if isinstance(demand_fn, (list, tuple)) and len(demand_fn) >= 1:
+        name = demand_fn[0]
+        args = demand_fn[1:]
+        if name == "uniform_demand" and len(args) == 2:
+            lb, ub = args
+            return f"uniform_demand(lb={lb}, ub={ub})"
+        if name == "normal_demand" and len(args) == 2:
+            mean, std = args
+            return f"normal_demand(mean={mean}, std={std})"
+        if name == "constant_demand" and len(args) == 1:
+            mean, = args
+            return f"constant_demand(mean={mean})"
+        if name == "poisson_demand" and len(args) == 1:
+            mean, = args
+            return f"poisson_demand(mean={mean})"
+        if name == "dyn_poisson_demand" and len(args) == 1:
+            mean, = args
+            return f"dyn_poisson_demand(base_mean={mean})"
+        if name in ("sin_demand", "cos_demand") and len(args) == 5:
+            mean, amp, period, phase, noise = args
+            return f"{name}(mean={mean}, amplitude={amp}, period={period}, phase={phase}, noise_std={noise})"
+        # 兜底：返回原始内容
+        return str(demand_fn)
+
+    # 其他未知类型
+    raise KeyError(f"Error: {demand_fn} not implemented.")
   
 
 

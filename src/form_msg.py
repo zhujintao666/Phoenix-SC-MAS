@@ -1,44 +1,70 @@
 from utils import get_state_description, get_demand_description
 from env import InventoryManagementEnv
 
+PROMPT_SET = "strict_capped.v1"
+# [HIGH PRIORITY] The following Task3 + GoldenRule are the recovered versions that performed best.
+
 task1_msg = (
-    "Task1: Do you want to remove anyone from your upstream supplier list?\n"
-    "Please consider the lead time and order cost when making decision. State your reason in 1-2 sentences first "
-    "and then provide your action as a list following this format (e.g., [0, 1] for removing agent0 and agent1 as suppliers, [] for doing nothing)\n")
-task2_msg = (
-    "Task2: Do you want to add anyone as your new supplier(s) given other available upstream suppliers in the environment?\n"
-    "Please state your reason in 1-2 sentences first "
-    "and then provide your action as a list following this format (e.g., [2, 3] for adding agent2 and agent3 as suppliers, [] for doing nothing)\n"
+    "Task1: Do you want to remove any upstream suppliers?\n"
+    "Consider: lead time, per-unit order cost, MOQ, reliability/capacity, and the impact on safety stock & holding cost.\n"
+    "Return EXACTLY one JSON list (e.g., [0,1] or []).\n"
 )
+
+task2_msg = (
+    "Task2: Do you want to add new supplier(s) from available options?\n"
+    "Consider: lead time reduction (lower holding cost), cost, capacity/reliability, MOQs, and cash.\n"
+    "Return EXACTLY one JSON list (e.g., [2,3] or []).\n"
+)
+
+# [HIGH PRIORITY] Recovered core: strict JSON + horizon/base-stock math + hard caps
 task3_msg = (
-    "Task3: Decide the order quantity to place with each supplier for THIS ROUND only. "
-    "You can only place orders to your upstream suppliers.\n"
+    "Task3: Decide the order quantity to place with each supplier for THIS ROUND only.\n"
     "Return EXACTLY ONE JSON object on a single line (no extra text):\n"
     '  {"orders":[q1,q2,...,qN], "why":"<1-2 short sentences>"}\n'
-    "Requirements:\n"
-    "- q1..qN are non-negative integers.\n"
-    "- The array length MUST be N (your upstream supplier count, in fixed order).\n"
-    "- If you choose to order zero, still return full-length zeros, e.g. {\"orders\":[0,0,...,0]}.\n"
-    "- Base values on demand, backlog, inventory, lead time, inbound and cost; do NOT copy example numbers.\n"
+    "\nHard numeric caps (you MUST satisfy ALL):\n"
+    "  - Non-negative INTEGERS only; array length N = your upstream supplier count (fixed order).\n"
+    "  - Production cap: total orders ≤ this-round production capacity.\n"
+    "  - Supplier cap: respect each supplier capacity; total ≤ sum of supplier capacities; respect MOQs.\n"
+    "  - Cash cap: keep a cash buffer; define\n"
+    "      unit_total_cost = unit_order_cost + unit_production_cost (+ shipping if any)\n"
+    "      cash_cap = floor((assets_now * (1 - 0.20)) / unit_total_cost)  # keep ≥20% assets as buffer\n"
+    "    and require total orders ≤ cash_cap.\n"
+    "  - Ramp cap (anti-spike): total orders ≤ ceil(last_total_orders * 1.30).\n"
+    "\nPlan over effective lead time L (avoid double-counting inbound):\n"
+    "  inbound_L_total = sum(arrivals_in_next_L_periods)\n"
+    "  coverage_gap = max(0, ExpectedDemand_over_next_L + CurrentBacklog - OnHandInventory - inbound_L_total)\n"
+    "Signal to follow (horizon rule):\n"
+    "  target = clamp_{≥0}(coverage_gap), then cap by production/supplier/cash/ramp limits above.\n"
+    "\nAllocation hint:\n"
+    "  Prefer lower lead time and lower unit cost; smooth across rounds (avoid one-shot spikes).\n"
+    "If some numbers are missing, be conservative: keep the ≥20% cash buffer and respect ramp cap.\n"
 )
+
 task4_msg = (
-    "Task4: What is the price you would like to set for the products?"
-    "Please state your reason in 1-2 sentences first "
-    "and then provide your action as a list following this format (e.g., [8])"
+    "Task4: Set product price for THIS ROUND.\n"
+    'Return EXACTLY ONE JSON: {"price": P, "why":"<1-2 short sentences>"} or {"prices":[p1,...], "why":"..."}\n'
+    "Ensure price ≥ (upstream order cost + production cost + a margin). Consider h/p trade-offs and competitor pricing if available.\n"
 )
+
 gold_rule_msg = (
-    "\n\nPlease follow the output format strictly.\n"
-    "Golden rule (horizon-based): Over the effective lead time L, target\n"
-    "  NewOrders ≈ clamp_{≥0}\n"
-    "    ( ExpectedDemand_over_next_L + CurrentBacklog\n"
-    "      - OnHandInventory - InboundOverNext_L ).\n"
+    "\nStrict output rules:\n"
+    "- For Task3, output ONLY the JSON on one line; no explanations before/after.\n"
+    "- Do NOT reveal your chain-of-thought; think silently and return final answer only.\n"
+    "- The JSON MUST satisfy all caps (production, supplier, cash, ramp). If target exceeds caps, reduce to the caps.\n"
+    '- If you order zero, still return full-length zeros: {"orders":[0,0,...,0]}.\n'
+    "- Keep 'why' ≤2 short sentences (e.g., which cap bound your decision: cash/production/supplier/ramp/coverage).\n"
+    "\n[HIGH PRIORITY] Golden rule (horizon-based base-stock): Over effective lead time L, target\n"
+    "  NewOrders ≈ clamp_{≥0}( ExpectedDemand_over_next_L + CurrentBacklog + SafetyStock(L)\n"
+    "                           - OnHandInventory - InboundOverNext_L ).\n"
     "Notes:\n"
-    "- ExpectedDemand_over_next_L can be estimated from recent sales.\n"
-    "- InboundOverNext_L equals the deliveries scheduled to arrive within L (use the arrivals window).\n"
-    "- Spread orders across rounds to avoid bullwhip; do NOT one-shot large orders.\n"
-    "- Respect constraints: production capacity, supplier capacity, and available assets (keep a cash buffer).\n"
-    "- Price (if applicable) should cover upstream order cost and production cost to avoid losses.\n"
-    "- Only order from available upstream suppliers; respect lead times and order costs when selecting suppliers.\n\n"
+    "- ExpectedDemand_over_next_L from recent sales trends.\n"
+    "- InboundOverNext_L = deliveries scheduled within L (arrivals window).\n"
+    "- SafetyStock(L) reflects holding cost (h) vs stockout/backlog penalty (p); if estimates exist, use a higher service level when p >> h\n"
+    "  (newsvendor-style critical fractile ≈ p/(p+h)); otherwise use a conservative buffer.\n"
+    "- Account for holding cost: avoid inventory far above the base-stock target when h is high.\n"
+    "- Respect constraints: supplier/production capacity, MOQ, and maintain the cash buffer.\n"
+    "- Smooth orders over rounds; do NOT place large one-shot orders.\n"
+    "\nInterpretation: order_costs/holding_cost/backlog_cost are per-unit (per period for holding/backlog).\n"
 )
 
 least_lead_time = (
