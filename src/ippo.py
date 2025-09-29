@@ -2,7 +2,6 @@
 Independent Proximal Policy Optimization (IPPO) with Parameter Sharing
 """
 import os
-
 import numpy as np
 import ray
 from ray import tune

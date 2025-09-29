@@ -1,9 +1,7 @@
-import os
-import sys
+import sys, os
+sys.path.append('src')
 import numpy as np
 from tqdm.auto import tqdm
-
-sys.path.append('src')
 
 from env import env_creator
 from config import env_configs, get_env_configs
@@ -15,20 +13,18 @@ from autogen import ConversableAgent
 
 np.random.seed(30)
 DRAW_FIGS = False
-NUM_EPISODES = 10
-ENV_NAME = "msbs3"
+NUM_EPISODES = 3
+ENV_NAME = "msbs44"
 USE_RANDOM_ENV_SEED = True
 enable_memory = True
-enable_knn_suggest = False
+enable_knn_suggest = True
 
 if not DRAW_FIGS:
     utils.visualize_state = lambda *args, **kwargs: None
 
-
 config_list = llm_config_list
 
 os.makedirs(f"results/{ENV_NAME}", exist_ok=True)
-
 run_id = utils.time_str() if hasattr(utils, "time_str") else None
 if run_id is None:
     import time
@@ -43,7 +39,6 @@ clear_dir(f"env/{ENV_NAME}")
 env_config_base = get_env_configs(env_configs=env_configs[ENV_NAME])
 print(env_config_base["demand_dist"])
 print(get_demand_description(env_config_base["demand_fn"]))
-
 
 def tune_llm_sampling(stage_agents):
     for ag in stage_agents:
@@ -87,7 +82,7 @@ for r in tqdm(range(NUM_EPISODES), desc="Episodes"):
         user_proxy=user_proxy,
         stage_agents=stage_agents,
         config_name=config_name,
-        round=r,
+        round_idx=r,
         run_tag=f"{run_id}-ep{r:03d}",
         enable_memory=enable_memory,
         enable_knn_suggest=enable_knn_suggest,
@@ -110,7 +105,6 @@ for r in tqdm(range(NUM_EPISODES), desc="Episodes"):
 
     rewards.append(float(reward))
     print(f"[EPISODE {r}] reward = {reward}")
-
 
 mean_reward = float(np.mean(rewards)) if len(rewards) else 0.0
 std_reward = float(np.std(rewards)) if len(rewards) else 0.0

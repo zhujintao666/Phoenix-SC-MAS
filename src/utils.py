@@ -278,13 +278,6 @@ def get_base_description(state, past_req_orders):
 
 
 def get_demand_description(demand_fn):
-    """
-    支持三种输入：
-    1) 字符串: 'uniform_demand' / 'sin_demand' ...
-    2) 元组: ('sin_demand', mean, amp, period, phase, noise_std) 等
-    3) Demand_fn 实例：data_simulation.Demand_fn(...)
-    """
-    # 3) 先处理对象实例
     try:
         from data_simulation import Demand_fn as _DF
     except Exception:
@@ -312,11 +305,9 @@ def get_demand_description(demand_fn):
                     f"noise_std={demand_fn.noise_std})")
         raise KeyError(f"Error: {name} not implemented.")
 
-    # 1) 字符串
     if isinstance(demand_fn, str):
         return demand_fn
 
-    # 2) 元组
     if isinstance(demand_fn, (list, tuple)) and len(demand_fn) >= 1:
         name = demand_fn[0]
         args = demand_fn[1:]
@@ -338,10 +329,8 @@ def get_demand_description(demand_fn):
         if name in ("sin_demand", "cos_demand") and len(args) == 5:
             mean, amp, period, phase, noise = args
             return f"{name}(mean={mean}, amplitude={amp}, period={period}, phase={phase}, noise_std={noise})"
-        # 兜底：返回原始内容
         return str(demand_fn)
 
-    # 其他未知类型
     raise KeyError(f"Error: {demand_fn} not implemented.")
   
 
@@ -371,15 +360,6 @@ def update_sup_action(sup_action: list, rm_match: str, add_match: str):
 def parse_order_list(raw_str: str,
                      num_suppliers: int,
                      default_key_prefix: str = "agent") -> np.ndarray:
-    """
-    解析 Task3 返回的 order 字符串 → ndarray(order_qty, shape=(num_suppliers,))
-    支持:
-      1. [("agent0": 8), ("agent1": 3)]
-      2. [8, 3]
-      3. 8, 3
-    解析不到时返回全 0。
-    """
-    # A. 键值对形式
     kv_pairs = re.findall(r'"?agent[_ ]?(\d+)"?\s*[:=]\s*([0-9]+)', raw_str)
     if kv_pairs:
         vec = np.zeros(num_suppliers, dtype=int)
@@ -389,13 +369,12 @@ def parse_order_list(raw_str: str,
                 vec[idx] = int(qty)
         return vec
 
-    # B. 方括号纯数字
     m = re.search(r'\[(.*?)\]', raw_str, re.DOTALL)
     nums = re.findall(r'\d+', m.group(1)) if m else re.findall(r'\d+', raw_str)
 
     if nums:
         nums = [int(x) for x in nums]
-        nums = (nums + [0] * num_suppliers)[:num_suppliers]  # 补/截断
+        nums = (nums + [0] * num_suppliers)[:num_suppliers]
         return np.array(nums, dtype=int)
 
     # fallback

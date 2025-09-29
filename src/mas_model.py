@@ -1,3 +1,4 @@
+# src/mas_model.py
 from typing import List, Dict, Any
 import os, csv, re, time, json, hashlib
 import numpy as np
@@ -9,8 +10,8 @@ try:
 except Exception:
     ConversableAgent = object
 
-
 from memory_module import ExperienceMemory, MemoryConfig
+
 
 def _sanitize_llm_config(cfg: dict) -> dict:
     if not isinstance(cfg, dict):
@@ -28,6 +29,7 @@ def _sanitize_llm_config(cfg: dict) -> dict:
             new_cl.append(item)
         d["config_list"] = new_cl
     return d
+
 
 def _deep_sanitize_llm_config(obj):
     if isinstance(obj, dict):
@@ -97,12 +99,13 @@ def create_agents(stage_names: List[str], num_agents_per_stage: int, llm_config)
 
     return agents
 
+
 def run_simulation(
     im_env,
     user_proxy,
     stage_agents,
     config_name: str,
-    round: int = 0,
+    round_idx: int = 0,
     enable_memory: bool = True,
     enable_knn_suggest: bool | None = None,
     run_tag: str | None = None,
@@ -183,7 +186,7 @@ def run_simulation(
             return "na"
 
     def _write_chat_summary(period: int, text: str, reward_sum: float):
-        fn = os.path.join(dir_chat, f"round{round}_period{period:03d}_reward{int(reward_sum)}.txt")
+        fn = os.path.join(dir_chat, f"round{round_idx}_period{period:03d}_reward{int(reward_sum)}.txt")
         with open(fn, "w", encoding="utf-8") as f:
             f.write(text)
         return fn
@@ -231,7 +234,7 @@ def run_simulation(
             if len(arr) == n_expected and all(x >= 0 for x in arr):
                 reason = ""
                 near = txt[max(0, m.end()): m.end() + 300]
-                m2 = re.search(r'"(?:why|reason|rationale)"\s*:\s*"([^"]{0,400})"', near, flags=re.I)  # 修复小拼写
+                m2 = re.search(r'"(?:why|reason|rationale)"\s*:\s*"([^"]{0,400})"', near, flags=re.I)
                 if m2: reason = m2.group(1).strip()
                 return np.array(arr, dtype=int), reason
         cand = []
@@ -392,6 +395,7 @@ def run_simulation(
         print("[CFG] init_inventory=", _sha_arr(getattr(im_env, "inventory", [])))
     except Exception as _e:
         print("[CFG] fingerprint error:", _e)
+
     # === Baselines: initial assets & initial inventories (for revive policy) ===
     S, A = im_env.num_stages, im_env.num_agents_per_stage
     bankrupt_cum = np.zeros((S, A), dtype=int)
@@ -510,27 +514,6 @@ def run_simulation(
         action_sup_dict = {}
         action_dem_dict = {}
 
-        emergent_events = getattr(im_env, "emergent_events", {}).get(period, [])
-        shutdown_list = None
-        recovery_list = None
-        for event in emergent_events:
-            if event == "demand_surge":
-                print("There is a sudden demand surge.")
-                try: im_env.create_demand_surge()
-                except Exception: pass
-            if event == "sudden_shutdown":
-                print("There is a sudden shutdown event.")
-                shutdown_list = getattr(im_env, "shut_seq", {}).get(period, [])
-                for s_id0, a_id0 in shutdown_list:
-                    try: state_dict = im_env.create_shutdown_event(s_id0, a_id0, state_dict)
-                    except Exception: pass
-            if event == "recovery":
-                print("Here is a recovery event.")
-                recovery_list = getattr(im_env, "rec_seq", {}).get(period, [])
-                for (s_id0, a_id0) in recovery_list:
-                    try: im_env.create_recovery_event(s_id0, a_id0)
-                    except Exception: pass
-
         try:
             running_prev = np.array(im_env.running_agents, dtype=int).copy()
         except Exception:
@@ -594,28 +577,28 @@ def run_simulation(
                         period=period, key=key, L=L_eff, vec_len=num_agents_per_stage
                     )
 
-                    lead_card = [
-                        "LeadTimeContext:",
-                        f"- lead_time = {L_eff} periods",
-                        f"- recent orders totals (t-1 → t-{L_eff}): {last_totals}",
-                        f"- inbound_next_vec (≈ orders at t-{L_eff}): {inbound_vec.tolist()} (total={inbound_total})",
-                    ]
-                    lead_orders = [
-                        "LeadTimeOrders:",
-                        f"- recent_vectors (t-1 → t-{L_eff}): { [v.tolist() for v in last_vecs] }",
+                    # ===== compact prompt =====
+                    env_ctx = [
+                        "EnvContext:",
+                        f"- period={period}, you={key} ({im_env.stage_names[stage_id]})",
+                        f"- L={L_eff} periods",
+                        f"- demand_this_round={cur_demand}",
+                        f"- inventory={cur_inventory}, backlog={cur_backlog}, assets={int(cur_assets)}",
+                        f"- inbound_next_L_total={inbound_total}, inbound_vec={inbound_vec.tolist()}",
+                        f"- recent_orders_totals t-1..t-{L_eff}: {last_totals}",
                     ]
 
-                    mem_hint_lines = []
+                    rules_ctx = []
                     if enable_memory and enable_knn_suggest and period >= WARMUP_PERIODS:
-                        knn_vec = mem.suggest_order_vector(
-                            s=stage_id, a=agent_id, q_state=state_vec, suppliers_mask=sup_vec
-                        )
+                        knn_vec = mem.suggest_order_vector(s=stage_id, a=agent_id, q_state=state_vec,
+                                                           suppliers_mask=sup_vec)
                         if knn_vec is not None:
-                            mem_hint_lines.append(
-                                f"MemoryHint: similar past states suggest orders ≈ {knn_vec.astype(int).tolist()} (masked by suppliers)."
-                            )
+                            rules_ctx.append("Rules:")
+                            rules_ctx.append(f"- KNN suggests ≈ {knn_vec.astype(int).tolist()} (masked)")
 
-                    rule_lines = []
+                    target_ratio = 1.0
+                    max_rules = 5
+
                     if enable_memory:
                         if enable_resurrection:
                             all_rules = mem.rules.get((stage_id, agent_id), [])
@@ -625,38 +608,33 @@ def run_simulation(
                                     for ins in r["insights"]:
                                         if isinstance(ins, str) and ins.strip():
                                             insights.append(ins.strip())
-                            seen = set()
-                            uniq_insights = []
+                            seen, uniq = set(), []
                             for ins in insights:
                                 if ins not in seen:
                                     seen.add(ins)
-                                    uniq_insights.append(ins)
-                            N = 8
-                            if uniq_insights:
-                                rule_lines.append("LearnedRules (global):")
-                                for ins in uniq_insights[:N]:
-                                    rule_lines.append(f"- {ins}")
+                                    uniq.append(ins)
+                            if uniq:
+                                if not rules_ctx:
+                                    rules_ctx.append("Rules:")
+                                for ins in uniq[:max_rules]:
+                                    rules_ctx.append(f"- {ins}")
                         else:
-                            rules = mem.retrieve_applicable_rules(stage_id, agent_id, state_vec, top_k=3)
+                            rules = mem.retrieve_applicable_rules(stage_id, agent_id, state_vec, top_k=max_rules)
                             if rules:
-                                rule_lines.append("ApplicableRules:")
-                                for r in rules:
+                                if not rules_ctx:
+                                    rules_ctx.append("Rules:")
+                                for r in rules[:max_rules]:
                                     insight = r["insights"][-1] if r.get("insights") else ""
-                                    rule_lines.append(f"- {insight}  [dist≈{r.get('distance', 0):.2f}]")
+                                    if insight:
+                                        rules_ctx.append(f"- {insight}")
 
-                    op_hints = [
-                        "Operational reminders:",
-                        "- Consider lead time: plan for demand over next L periods, not only current demand.",
-                        "- If backlog exists, clear it gradually across L; avoid one-shot overshoot.",
-                        "- Base orders on a forecast of downstream demand (sum of downstream orders for non-retailer stages, customer demand for retailer) over the next L periods; then add backlog-clearance and subtract on-hand inventory and inbound."
-                    ]
-                    prefix_parts = ["You MUST use the following context when deciding orders."]
-                    prefix_parts += lead_card + lead_orders + mem_hint_lines + rule_lines + op_hints
-                    prefix = "\n".join(prefix_parts) + "\n"
+                    prefix = "\n".join(
+                        ["You MUST use the following context when deciding orders."]
+                        + env_ctx
+                        + ([""] + rules_ctx if rules_ctx else [])
+                    ) + "\n"
 
                     base_msg, _state_info = generate_msg(
-                        shutdown_list=shutdown_list,
-                        recovery_list=recovery_list,
                         enable_graph_change=enable_graph_change,
                         stage_id=stage_id,
                         cur_agent_id=agent_id,
@@ -669,15 +647,10 @@ def run_simulation(
                     )
 
                     body_full = ''.join(base_msg)
-                    suffix = (
-                        f'\nReturn ONE JSON object on a single line:\n'
-                        f'{{"orders":[q1,q2,...,q{num_agents_per_stage}], "why":"<short reason>"}}\n'
-                        f'If you cannot return JSON, it is OK to output text; I will extract the numbers.\n'
-                    )
-                    budget = MAX_MSG_CHARS - len(prefix) - len(suffix)
+                    budget = MAX_MSG_CHARS - len(prefix)
                     if budget < 0: budget = 0
                     body = body_full[:budget]
-                    msg0 = prefix + body + suffix
+                    msg0 = prefix + body
 
                     chat_result = user_proxy.initiate_chat(
                         stage_agents[stage_id*num_agents_per_stage + agent_id],
@@ -720,6 +693,35 @@ def run_simulation(
                     else:
                         final_vec = np.maximum(0, raw_vec).astype(int)
 
+                    try:
+                        cap_ratio = float(getattr(im_env, "order_cap_ratio", 2.0))
+                    except Exception:
+                        cap_ratio = 2.0
+
+                    # include backlog in base
+                    if stage_id == 0:
+                        need_base = int(cur_demand + cur_backlog)  # 零售商: 当前需求 + backlog
+                    else:
+                        need_base = int(downstream_need + cur_backlog)  # 上游: 下游需求 + backlog
+
+                    cap_total = int(max(0, np.floor(cap_ratio * max(0, need_base))))
+                    total_now = int(final_vec.sum())
+
+                    if total_now > cap_total:
+                        if cap_total <= 0:
+                            # 保底: 如果 backlog 存在，至少允许下单 1 单
+                            if cur_backlog > 0:
+                                final_vec[:] = 1
+                            else:
+                                final_vec = np.zeros_like(final_vec, dtype=int)
+                        else:
+                            scaled = np.floor(final_vec.astype(float) * (cap_total / float(total_now))).astype(int)
+                            remainder = int(cap_total - int(scaled.sum()))
+                            if remainder > 0:
+                                for idx in np.argsort(-final_vec)[:remainder]:
+                                    scaled[idx] += 1
+                            final_vec = scaled.astype(int)
+
                     total_chat_summary += (
                         f"=== {key} | period={period} ===\n"
                         f"[PROMPT SENT]\n{msg0}\n"
@@ -733,6 +735,27 @@ def run_simulation(
                         f"[DBG][LLM] p={period} {key} raw={raw_vec.tolist()} "
                         f"mask={sup_vec.astype(int).tolist()} final={final_vec.tolist()} msg='{safe_txt}'"
                     )
+
+                    # === Simple proportional cap ===
+                    total_order = int(final_vec.sum())
+                    demand_base = int(cur_demand if stage_id == 0 else downstream_need)
+
+                    if demand_base > 0:
+                        cap_total = 3 * demand_base
+                    else:
+                        cap_total = 10
+
+                    if total_order > cap_total:
+                        scaled = np.floor(final_vec.astype(float) * (cap_total / float(total_order))).astype(int)
+                        remainder = cap_total - int(scaled.sum())
+                        if remainder > 0:
+                            # 把剩余的分配给原本下单最多的几个 supplier
+                            for idx in np.argsort(-final_vec)[:remainder]:
+                                scaled[idx] += 1
+                        final_vec = scaled.astype(int)
+
+                    print(f"[CAP] {key} demand={demand_base}, cap={cap_total}, "
+                          f"order_before={total_order}, order_after={final_vec.sum()}, vec={final_vec.tolist()}")
 
                     parsed_vec = final_vec
 
@@ -973,7 +996,7 @@ def run_simulation(
                 if policy == "initial_assets_initinv_plus_backlog":
                     target_assets = float(init_assets0[s_bk, a_bk])
                     target_inventory = int(max(0, int(init_inventories0[s_bk, a_bk]) + int(backlog_t)))
-                elif policy in ("fix", "const", "constant"):  # ← 新增显式分支
+                elif policy in ("fix", "const", "constant"):
                     target_assets = float(revive_assets)
                     target_inventory = int(revive_inventory)
                 else:
@@ -1051,6 +1074,7 @@ def run_simulation(
         if use_scheduled_reflection:
             bankrupt_set_this_period = set(bankrupt_now)
             skip_scheduled_for_bankrupt_this_period = enable_bankruptcy_reflection
+
             def _last_k_obs(s, a, k):
                 try:
                     arr = mem.last_n(s, a, max(k, 6))
@@ -1236,6 +1260,7 @@ def run_simulation(
         print("[Saved]", RESUR_PATH)
     except Exception as e:
         print("[WARN] close resurrection file failed:", e)
+
     saved_bankruptcy = False
     if hasattr(im_env, "bankruptcy_log") and len(getattr(im_env, "bankruptcy_log", [])) > 0:
         try:
@@ -1300,12 +1325,12 @@ def run_simulation(
                     plt.axvline(p, color="g", linestyle="--", alpha=0.7, linewidth=1)
 
                 plt.title(f"Agent s{s}-a{a} | assets & events")
-                plt.xlabel("period");
-                plt.ylabel("assets");
+                plt.xlabel("period")
+                plt.ylabel("assets")
                 plt.legend()
                 out = os.path.join(dir_plots, f"s{s}_a{a}_assets_events.png")
-                plt.tight_layout();
-                plt.savefig(out);
+                plt.tight_layout()
+                plt.savefig(out)
                 plt.close()
 
                 # Figure 2: ops panel
@@ -1313,7 +1338,7 @@ def run_simulation(
                 ax1 = plt.gca()
                 ax1.plot(g_obs["period"], g_obs["demand"], label="demand")
                 ax1.plot(g_obs["period"], g_obs["order"], label="order")
-                ax1.set_xlabel("period");
+                ax1.set_xlabel("period")
                 ax1.set_ylabel("flow")
 
                 ax2 = ax1.twinx()
@@ -1331,8 +1356,8 @@ def run_simulation(
                 plt.legend(h1 + h2, l1 + l2, loc="upper left")
                 plt.title(f"Agent s{s}-a{a} | ops panel")
                 out = os.path.join(dir_plots, f"s{s}_a{a}_ops.png")
-                plt.tight_layout();
-                plt.savefig(out);
+                plt.tight_layout()
+                plt.savefig(out)
                 plt.close()
 
             print(f"[Saved] enhanced plots -> {dir_plots}")
@@ -1342,17 +1367,4 @@ def run_simulation(
     if return_meta:
         return {"episode_reward": float(episode_reward), "api_cost": float(api_cost), "run_dir": run_dir}
     return float(episode_reward)
-
-
-
-
-
-
-
-
-
-
-
-
-
 

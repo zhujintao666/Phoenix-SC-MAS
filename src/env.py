@@ -57,9 +57,6 @@ class InventoryManagementEnv(MultiAgentEnv):
         agent_profiles: list,
         enable_graph_change: bool,
         enable_price_change: bool,
-        emergent_events: dict,
-        shut_seq: dict,
-        rec_seq: dict,
         llm_agents: list = None,
         init_assets: np.array = None,
         init_seed: int = 0,
@@ -119,10 +116,6 @@ class InventoryManagementEnv(MultiAgentEnv):
         self.sc_graph = sc_graph
         self.enable_graph_change = enable_graph_change
         self.enable_price_change = enable_price_change
-        self.emergent_events = emergent_events
-        self.shut_seq = shut_seq
-        self.rec_seq = rec_seq
-
         self.init_assets = np.array(init_assets, dtype=float).reshape(self.num_stages, self.num_agents_per_stage)
         self.assets = self.init_assets.copy()
 
@@ -553,9 +546,6 @@ def env_creator(env_config):
         state_format=env_config['state_format'],
         enable_graph_change=env_config["enable_graph_change"],
         enable_price_change=env_config["enable_price_change"],
-        emergent_events=env_config["emergent_events"],
-        shut_seq=env_config["shut_seq"],
-        rec_seq=env_config["rec_seq"],
         init_assets=env_config['init_assets'],
         agent_profiles=agent_profiles,
         sc_graph=sc_graph,
