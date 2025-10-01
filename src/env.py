@@ -12,7 +12,6 @@ import os
 import numpy as np
 from gymnasium import spaces
 from ray.rllib.env.multi_agent_env import MultiAgentEnv
-
 from config import env_configs, get_env_configs
 from utils import visualize_state, parse_stage_agent_id, clear_dir
 from data_simulation import generate_sup_dem_relations
@@ -59,6 +58,7 @@ class InventoryManagementEnv(MultiAgentEnv):
         enable_price_change: bool,
         llm_agents: list = None,
         init_assets: np.array = None,
+        demand_fns_stage0: list | None = None,
         init_seed: int = 0,
     ):
         super().__init__()
@@ -92,7 +92,7 @@ class InventoryManagementEnv(MultiAgentEnv):
         self.num_periods = num_periods
         self.stage_names = stage_names
         self.demand_dist = demand_dist
-
+        self.demand_fns_stage0 = demand_fns_stage0
         self.init_inventories = np.array(init_inventories, dtype=int).reshape(self.num_stages, self.num_agents_per_stage)
         self.lead_times = np.array(lead_times, dtype=int).reshape(self.num_stages, self.num_agents_per_stage, self.num_agents_per_stage)
         self.max_lead_time = int(np.max(self.lead_times))
@@ -126,7 +126,11 @@ class InventoryManagementEnv(MultiAgentEnv):
         self.arriving_orders = np.zeros((self.num_stages, self.num_agents_per_stage, self.num_agents_per_stage, self.num_periods + 1), dtype=int)
         self.sales = np.zeros((self.num_stages, self.num_agents_per_stage, self.num_periods + 1), dtype=int)
         self.backlogs = np.zeros((self.num_stages, self.num_agents_per_stage, self.num_periods + 1), dtype=int)
-        self.demands = np.zeros(self.num_periods + 1, dtype=int)
+        if self.demand_fns_stage0:
+            # shape: [num_agents_per_stage, num_periods+1]
+            self.demands = np.zeros((self.num_agents_per_stage, self.num_periods + 1), dtype=int)
+        else:
+            self.demands = np.zeros(self.num_periods + 1, dtype=int)
         self.profits = np.zeros((self.num_stages, self.num_agents_per_stage, self.num_periods + 1), dtype=int)
         self.total_profits = np.zeros(self.num_periods + 1, dtype=int)
         self.running_agents = np.ones((self.num_stages, self.num_agents_per_stage))
@@ -163,7 +167,8 @@ class InventoryManagementEnv(MultiAgentEnv):
         self.arriving_orders.fill(0)
         self.sales.fill(0)
         self.backlogs.fill(0)
-        self.demands.fill(0)
+        if isinstance(self.demands, np.ndarray):
+            self.demands[...] = 0
         self.profits.fill(0)
         self.total_profits.fill(0)
         self.running_agents = np.ones((self.num_stages, self.num_agents_per_stage))
@@ -214,7 +219,16 @@ class InventoryManagementEnv(MultiAgentEnv):
         ]).reshape(self.num_stages, self.num_agents_per_stage, self.num_agents_per_stage)
 
         # retail demand for this period
-        self.demands[t] = int(self.demand_fn(t))
+        # --- Retail demand for this period (supports per-retailer or legacy single demand) ---
+        if self.demand_fns_stage0:
+            # Per-retailer demand: one Demand_fn per stage-0 agent
+            for i in range(self.num_agents_per_stage):
+                self.demands[i, t] = int(self.demand_fns_stage0[i](t))
+            demand_vec0 = self.demands[:, t].astype(int)  # shape: (A,)
+        else:
+            # Legacy: one global Demand_fn for all retailers
+            self.demands[t] = int(self.demand_fn(t))
+            demand_vec0 = np.full(self.num_agents_per_stage, int(self.demands[t]), dtype=int)
 
         # add arrivals to inventory (based on lead times)
         for m in range(self.num_stages):
@@ -245,17 +259,13 @@ class InventoryManagementEnv(MultiAgentEnv):
         self.arriving_orders[:, :, :, t] = (self.orders[:, :, :, t] * fulfilled_rates).astype(int)
 
         # sales: for stages > 0 sales equal downstream arrivals; retailer bounded by demand/inventory/capacity
-        # === 分清“发货(出库)”与“到货(销售/成本确认)” ===
         M, A = self.num_stages, self.num_agents_per_stage
 
-        # 1) 本期发货量（dispatch）：用于库存与 backlog 结转（上游 s>=1 才对下游发货）
         dispatched_out = np.zeros((M, A), dtype=int)
         for s in range(1, M):
             for a in range(A):
-                # 本期 t 从 (s,a) 发往下游阶段 s-1 的所有量（按你上面比例分配后的整数结果）
                 dispatched_out[s, a] = int(self.arriving_orders[s - 1, :, a, t].sum())
 
-        # 2) 上游销售（收入口径）：按“下游本期收到 = 上游在 t-lt 时发出的货”
         sales_up = np.zeros((M, A), dtype=int)
         for s in range(1, M):
             for a in range(A):
@@ -267,40 +277,36 @@ class InventoryManagementEnv(MultiAgentEnv):
                         total_recv += int(self.arriving_orders[s - 1, i, a, idx])
                 sales_up[s, a] = total_recv
 
-        # 3) 销售写回：零售商按需卖，上游按“到货”确认收入
+        # Retail sales (stage 0) -- use per-agent demand vector
         self.sales[0, :, t] = np.minimum(
-            np.minimum(self.backlogs[0, :, t - 1] + self.demands[t], current_inventories[0]),
+            np.minimum(self.backlogs[0, :, t - 1] + demand_vec0, current_inventories[0]),
             self.prod_capacities[0]
         )
+        # Upstream sales unchanged (already computed as sales_up)
         self.sales[1:, :, t] = sales_up[1:, :]
 
-        # 4) backlog 结转：用“本期发货量（dispatch）”冲减（不是 sales）
-        #    s=0：外部需求 - 当期销售
+        # Retail backlog roll-over (stage 0) -- use per-agent demand vector
         self.backlogs[0, :, t] = np.maximum(
             0,
-            self.backlogs[0, :, t - 1] + self.demands[t] - self.sales[0, :, t]
+            self.backlogs[0, :, t - 1] + demand_vec0 - self.sales[0, :, t]
         )
-        #    s>=1：下游本期请求 - 我本期实际发走
-        #    cum_req_orders[s] 是本期下游对阶段 s 的总请求
+        # Upstream backlog roll-over unchanged
         self.backlogs[1:, :, t] = np.maximum(
             0,
             self.backlogs[1:, :, t - 1] + cum_req_orders[1:] - dispatched_out[1:, :]
         )
 
-        # 5) 期末库存：零售商扣“当期销售”，上游扣“本期发货”
         inv_end = current_inventories.copy()
         inv_end[0] -= self.sales[0, :, t]
         for s in range(1, M):
             inv_end[s, :] -= dispatched_out[s, :]
-        # 数值保护（如仍出现负值，说明上游放货超库存/产能，需回查上游 fulfilled 分配与取整）
         self.inventories[:, :, t] = np.maximum(0, inv_end)
 
-        # 6) 采购成本（买方收到时确认）：按“本期到货 = 上游在 t-lt 发的货”
         order_costs_now = np.zeros((M, A), dtype=int)
-        for m in range(M):  # 买方阶段（下游索引）
-            for i in range(A):  # 买方 agent
+        for m in range(M):
+            for i in range(A):
                 total_cost = 0
-                for j in range(A):  # 对应上游供应商
+                for j in range(A):
                     lt = int(self.lead_times[m][i][j])
                     idx = t if lt <= 0 else t - lt
                     if idx >= 0:
@@ -308,7 +314,6 @@ class InventoryManagementEnv(MultiAgentEnv):
                         total_cost += qty * int(self.order_costs[m][j])
                 order_costs_now[m, i] = total_cost
 
-        # 7) 利润
         self.profits[:, :, t] = (
                 self.sale_prices * self.sales[:, :, t]
                 - order_costs_now
@@ -449,11 +454,37 @@ class InventoryManagementEnv(MultiAgentEnv):
         }
 
     def parse_state(self, state_dict: dict = None) -> dict:
+        """
+        Build a dict the LLM can read. We keep the original wire format in _parse_state(),
+        and augment it here with a per-retailer demand field so mas_model.EnvContext can show it.
+        """
         if state_dict is None:
             state_dict = self.state_dict
+
         parsed_state = {}
+        t = self.period  # current period
+
         for stage_agent_id_name, state in state_dict.items():
-            parsed_state[stage_agent_id_name] = self._parse_state(state)
+            p = self._parse_state(state)
+            # --- Inject retailer's per-agent demand for this period (LLM reads this via EnvContext) ---
+            # self.demands can be:
+            #   - shape (A, T+1) when per-retailer demand_fns_stage0 is used
+            #   - shape (T+1,) for legacy single-demand shared by all retailers
+            try:
+                parts = stage_agent_id_name.split("_")
+                s = int(parts[1]);
+                a = int(parts[3])
+            except Exception:
+                s, a = -1, -1
+            if s == 0:
+                if isinstance(self.demands, np.ndarray) and self.demands.ndim == 2:
+                    # per-retailer demand
+                    d_now = int(self.demands[a, t]) if (0 <= a < self.num_agents_per_stage) else 0
+                else:
+                    # legacy single demand
+                    d_now = int(self.demands[t]) if isinstance(self.demands, np.ndarray) else 0
+                p["demand"] = d_now  # mas_model.run_simulation reads this key
+            parsed_state[stage_agent_id_name] = p
         return parsed_state
 
     # ---------------------------- utilities ----------------------------
@@ -533,6 +564,7 @@ def env_creator(env_config):
         lead_times=env_config['lead_times'],
         demand_dist=env_config['demand_dist'],
         demand_fn=env_config['demand_fn'],
+        demand_fns_stage0=env_config.get('demand_fns_stage0', None),
         prod_capacities=env_config['prod_capacities'],
         sale_prices=env_config['sale_prices'],
         order_costs=env_config['order_costs'],

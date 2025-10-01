@@ -19,11 +19,16 @@ gold_rule_msg = (
     "  • forecast_over_L: average or simple trend of recent_sales.\n"
     "  • inbound_within_L: count ONLY arrivals scheduled within L (avoid double-counting).\n"
     "  • safety_buffer: higher when backlog penalty ≫ holding cost; otherwise keep modest.\n"
+    "\nDistribution rule (if multiple suppliers):\n"
+    "  • You MUST distribute the target order quantity across upstream suppliers.\n"
+    "  • You may split evenly or proportionally to past orders/costs, but avoid sending all to one unless justified.\n"
+    "  • Do not output all zeros unless BOTH demand and backlog are strictly zero.\n"
     "\nStrict output rules:\n"
     "- Output ONLY the JSON on one line; no text before/after.\n"
     "- Keep 'why' ≤2 short clauses (e.g., coverage/trend/buffer).\n"
-    '- If zero, still return full-length zeros: {"orders":[0,0,...,0]}.\n'
+    '- If zero, still return full-length zeros: {\"orders\":[0,0,...,0]}.\n'
 )
+
 
 least_lead_time = (
     "Task: Which upstream compan(ies) has the least lead time to you? "

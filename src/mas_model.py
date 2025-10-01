@@ -1,5 +1,6 @@
 # src/mas_model.py
 from typing import List, Dict, Any
+from pathlib import Path  # for debug file path handling
 import os, csv, re, time, json, hashlib
 import numpy as np
 import pandas as pd
@@ -177,6 +178,8 @@ def run_simulation(
     WARMUP_PERIODS = 6
     MAX_MSG_CHARS = 4000
     EMERGENCY_K = 2
+    DEBUG_ROUNDS = 3  # print only for the first N periods
+    DEBUG_ONLY_AGENT = None  # set to (stage_id, agent_id) to focus on one agent; or None for all
 
     def _sha_arr(arr):
         try:
@@ -503,6 +506,55 @@ def run_simulation(
         except TypeError:
             state_dict = im_env.parse_state(getattr(im_env, "state_dict", {}))
 
+        # ========= DEBUG: dump link matrices and per-agent summaries (first DEBUG_ROUNDS periods) =========
+        if period < DEBUG_ROUNDS:
+            debug_path = Path(dir_chat) / "debug_links.txt"
+            with open(debug_path, "a", encoding="utf-8") as f:
+                f.write(f"\n=== Period {period} ===\n")
+
+                # (1) Dump full relation matrices per stage
+                for s in range(num_stages):
+                    try:
+                        sup_mat = np.asarray(im_env.supply_relations[s], dtype=int)
+                        dem_mat = np.asarray(im_env.demand_relations[s], dtype=int)
+                    except Exception:
+                        sup_mat = np.zeros((num_agents_per_stage, num_agents_per_stage), dtype=int)
+                        dem_mat = np.zeros((num_agents_per_stage, num_agents_per_stage), dtype=int)
+                    f.write(f"Stage {s} supply_relations:\n{sup_mat}\n")
+                    f.write(f"Stage {s} demand_relations:\n{dem_mat}\n")
+
+                # (2) Per-agent summary: upstream list, supplier mask, downstream_need, backlog
+                for s in range(num_stages):
+                    for a in range(num_agents_per_stage):
+                        key = f"stage_{s}_agent_{a}"
+                        st = state_dict.get(key, {})
+
+                        # Raw upstream vector and supplier mask (top stage defaults to all-ones)
+                        try:
+                            raw_sup = np.asarray(im_env.supply_relations[s][a], dtype=int)
+                        except Exception:
+                            raw_sup = np.asarray(st.get("suppliers", np.zeros(num_agents_per_stage)), dtype=int)
+                        sup_idx = [j for j, v in enumerate(raw_sup) if v > 0]
+                        sup_mask = (np.ones(num_agents_per_stage, dtype=int)
+                                    if s == num_stages - 1 else (raw_sup > 0).astype(int))
+
+                        # Downstream requested qty to this agent in THIS period (meaningful for s>0)
+                        downstream_need = 0
+                        if s > 0:
+                            for d in range(num_agents_per_stage):
+                                dk = f"stage_{s - 1}_agent_{d}"
+                                vec = all_action_order_dicts.get(period, {}).get(
+                                    dk, np.zeros(num_agents_per_stage, dtype=int)
+                                )
+                                if a < len(vec):
+                                    downstream_need += int(vec[a])
+
+                        f.write(
+                            f"{key}: upstream={sup_idx} sup_mask={sup_mask.tolist()} "
+                            f"downstream_need={downstream_need} backlog={int(st.get('backlog', 0))}\n"
+                        )
+        # ========= /DEBUG =========
+
         past_req_orders = all_action_order_dicts.get(period, dict())
         try:
             im_env.sc_graph.update_graph(state_dict=state_dict, past_req_orders=past_req_orders)
@@ -560,12 +612,6 @@ def run_simulation(
                         sup_vec = np.ones(num_agents_per_stage, dtype=int)
                     else:
                         sup_vec = (sup_vec > 0).astype(int)
-                        try:
-                            sup_alive_mask = np.asarray(running_prev[stage_id + 1], dtype=int)
-                            Lg = min(len(sup_vec), len(sup_alive_mask))
-                            sup_vec[:Lg] = sup_vec[:Lg] * (sup_alive_mask[:Lg] > 0).astype(int)
-                        except Exception:
-                            pass
 
                     if stage_id < num_stages - 1 and sup_vec.sum() == 0 and (downstream_need > 0 or cur_backlog > 0):
                         print(
@@ -709,7 +755,6 @@ def run_simulation(
 
                     if total_now > cap_total:
                         if cap_total <= 0:
-                            # 保底: 如果 backlog 存在，至少允许下单 1 单
                             if cur_backlog > 0:
                                 final_vec[:] = 1
                             else:
@@ -749,7 +794,6 @@ def run_simulation(
                         scaled = np.floor(final_vec.astype(float) * (cap_total / float(total_order))).astype(int)
                         remainder = cap_total - int(scaled.sum())
                         if remainder > 0:
-                            # 把剩余的分配给原本下单最多的几个 supplier
                             for idx in np.argsort(-final_vec)[:remainder]:
                                 scaled[idx] += 1
                         final_vec = scaled.astype(int)
@@ -757,6 +801,14 @@ def run_simulation(
                     print(f"[CAP] {key} demand={demand_base}, cap={cap_total}, "
                           f"order_before={total_order}, order_after={final_vec.sum()}, vec={final_vec.tolist()}")
 
+                    # DEBUG: show raw -> mask -> final for this agent (place right BEFORE `parsed_vec = final_vec`)
+                    if period < DEBUG_ROUNDS and (DEBUG_ONLY_AGENT is None or DEBUG_ONLY_AGENT == (stage_id, agent_id)):
+                        mask_list = (sup_vec if isinstance(sup_vec, np.ndarray) else np.asarray(sup_vec)).astype(
+                            int).tolist()
+                        print(
+                            f"[DBG][ORDERS] p={period} {key} | "
+                            f"raw={raw_vec.tolist()} mask={mask_list} final={final_vec.tolist()} sum={int(final_vec.sum())}"
+                        )
                     parsed_vec = final_vec
 
                     action_order_dict[key] = parsed_vec
@@ -857,10 +909,10 @@ def run_simulation(
                 try:
                     total_cost = 0.0
                     A = im_env.num_agents_per_stage
-                    for j in range(A):  # j: 上游供应商 agent
+                    for j in range(A):
                         lt = int(im_env.lead_times[s][a][j])
                         idx = t_end if lt <= 0 else t_end - lt
-                        if idx >= 0:  # 只有当“发货时刻”落在时间轴内，才算作本期收到
+                        if idx >= 0:
                             qty_recv_now = int(im_env.arriving_orders[s, a, j, idx])
                             total_cost += float(im_env.order_costs[s, j]) * qty_recv_now
                     order_cost = float(total_cost)

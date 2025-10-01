@@ -1,201 +1,82 @@
 # src/config.py
-"""
-Environment Configurations
-"""
+# Minimal, runnable config module with msbs44 and get_env_configs compatible with your env.py.
+
 import numpy as np
+from utils import save_dict_to_json
 from data_simulation import (
     generate_lead_time, generate_prod_capacity, generate_cost_price,
     generate_sup_dem_relations, generate_holding_costs, generate_backlog_costs,
     generate_init_inventories, Demand_fn, generate_init_assets,
 )
-import os
-from utils import save_dict_to_json
 
 np.random.seed(0)
 
+# ----- env_configs: include only the one you currently use (msbs44) -----
 env_configs = {
-"msbs44": {
-    "config_name": "msbs44",
-    "sup_dem_relation_type": "random",   # 用随机连接，避免完全固定的小图
-    "num_init_suppliers": 2,
-    "num_init_customers": 2,
-    "num_agents_per_stage": 4,
-    "num_periods": 200,
-    "num_stages": 4,
-    "stage_names": ['retailer', "wholesaler", 'distributor', 'manufacturer'],
-
-    # --- resurrection / reflection ---
-    "enable_resurrection": False,
-    "enable_regular_reflection_with_resurrection": True,
-    "enable_bankruptcy_reflection": False,
-    "max_bankruptcies": 1,
-
-    # --- resurrection policy ---
-    "revive_policy": "fix",
-    "revive_assets": 2500,
-    "revive_inventory": 50,
-    "reset_suppliers_on_revive": True,
-    "stop_on_exhausted_resurrections": True,
-
-    # --- distributions ---
-    "init_inventory_dist": ("uniform", 10, 15),
-    "price_cost_dist": "uniform",
-    "lead_time_dist": ("constant", 2),
-    "prod_capacity_dist": ("uniform", 6666, 6666),
-    "demand_fn": ("uniform_demand", 4, 8),
-    "holding_costs_dist": "constant",
-    "backlog_costs_dist": "constant",
-    "profit_rate_dist": ("uniform", 0, 1),
-    "init_assets_dist": ("cost_based",),
-
-    # --- scalers ---
-    "init_assets_multiple": 10,
-    "init_inventory_multiplier": 1,
-    "init_assets_multiplier": 3,
-
-    # --- LLM placement ---
-    "llm_agents": [(i, j) for i in range(4) for j in range(4)],  # 全部16个agent都用LLM
-    "enable_graph_change": False,
-    "enable_price_change": False,
-    "state_format": "base",
-    "env_no_backlog": False,
-},
-
-    "msbs3": {
-        "config_name": "msbs3",
-        "sup_dem_relation_type": "fix",
-        "num_init_suppliers": 1,
-        "num_init_customers": 1,
-        "num_agents_per_stage": 1,
-        "num_periods": 200,
+    "msbs44": {
+        "config_name": "msbs44",
+        "sup_dem_relation_type": "full",
+        "num_init_suppliers": 2,
+        "num_init_customers": 2,
+        "num_agents_per_stage": 4,
+        "num_periods": 50,
         "num_stages": 4,
         "stage_names": ['retailer', "wholesaler", 'distributor', 'manufacturer'],
 
-        # --- resurrection / reflection switches ---
+        # Resurrection / reflection (kept for compatibility)
         "enable_resurrection": False,
         "enable_regular_reflection_with_resurrection": True,
         "enable_bankruptcy_reflection": False,
         "max_bankruptcies": 1,
 
-        # --- resurrection policy (kept for compatibility) ---
-        "revive_policy": "fix",  # or "initial_assets_initinv_plus_backlog"
+        "revive_policy": "fix",
         "revive_assets": 2500,
         "revive_inventory": 50,
         "reset_suppliers_on_revive": True,
         "stop_on_exhausted_resurrections": True,
 
-        # --- distributions (unchanged style) ---
+        # Distributions
         "init_inventory_dist": ("uniform", 10, 15),
         "price_cost_dist": "uniform",
         "lead_time_dist": ("constant", 2),
         "prod_capacity_dist": ("uniform", 6666, 6666),
-        "demand_fn": ("uniform_demand", 4, 8),
+        "demand_fn": ("sin_demand", 12, 4, 12, 0, 0),  # legacy global demand
+
+        # If you want per-retailer demand, uncomment and edit the list below:
+         "demand_fn_stage0_list": [
+             ("sin_demand", 12, 4, 12, 0, 0.0),
+             ("sin_demand", 12, 4, 12, 0, 0.5),
+             ("sin_demand", 12, 4, 12, 0, 1.0),
+             ("sin_demand", 12, 4, 12, 0, 2.0),
+         ],
+
         "holding_costs_dist": "constant",
         "backlog_costs_dist": "constant",
         "profit_rate_dist": ("uniform", 0, 1),
         "init_assets_dist": ("cost_based",),
 
-        # --- scalers (same as before) ---
-        "init_assets_multiple": 10,
+        # Scalers
+        "init_assets_multiple": 6666,
         "init_inventory_multiplier": 1,
-        "init_assets_multiplier": 3,
+        "init_assets_multiplier": 6666,
 
-        # --- LLM placement & env toggles ---
-        "llm_agents": [(0, 0), (1, 0), (2, 0), (3, 0)],
-        "enable_graph_change": False,
-        "enable_price_change": False,
-        "state_format": "base",
-        "env_no_backlog": False,
-    },
-
-    "llm_sampling": {
-        "config_name": "llm_sampling",
-        "sup_dem_relation_type": "fix",
-        "num_init_suppliers": 1,
-        "num_init_customers": 1,
-        "num_agents_per_stage": 1,
-        "num_periods": 50,
-        "num_stages": 4,
-        "stage_names": ['retailer', 'wholesaler', 'distributor', 'manufacturer'],
-
-        "init_inventory_dist": ("uniform", 10, 15),
-        "price_cost_dist": "uniform",
-        "lead_time_dist": ("constant", 2),
-        "prod_capacity_dist": ("uniform", 10, 20),
-        "demand_fn": ("uniform_demand", 4, 8),
-        "holding_costs_dist": "constant",
-        "backlog_costs_dist": "constant",
-        "profit_rate_dist": ("uniform", 0, 1),
-        "init_assets_dist": ("cost_based",),
-        "init_assets_multiple": 10,
-
-        "llm_agents": [(0, 0), (1, 0), (2, 0), (3, 0)],
-        "enable_graph_change": False,
-        "enable_price_change": False,
-        "state_format": "base",
-        "env_no_backlog": False,
-
-        "emergent_events": [],
-        "shut_seq": {},
-        "rec_seq": {},
-
-        # keep the cap here as well (optional)
-        "order_cap_ratio": 2.0,
-    },
-
-    "test": {
-        "config_name": "test",
-        "sup_dem_relation_type": "random",  # random/fixed
-        "num_init_suppliers": 1,
-        "num_init_customers": 1,
-        "num_agents_per_stage": 4,  # >= 2
-        "num_periods": 16,
-        "num_stages": 4,
-        "stage_names": ['retailer', 'wholesaler', 'distributor', 'manufacturer'],
-
-        "init_inventory_dist": "constant",  # constant/uniform/etc
-        "price_cost_dist": "constant",      # constant/uniform/normal/etc
-        "lead_time_dist": "constant",       # constant/uniform
-        "prod_capacity_dist": "constant",   # constant/uniform
-        "demand_fn": "constant_demand",     # constant/functional
-        "holding_costs_dist": "constant",
-        "backlog_costs_dist": "constant",
-        "profit_rate_dist": "constant",
-
-        "llm_agents": None,
-        "state_format": "base",
-    },
-
-    "basic": {
-        "config_name": "basic",
-        "sup_dem_relation_type": "random",  # random/fixed
-        "num_init_suppliers": 1,
-        "num_init_customers": 1,
-        "num_stages": 4,
-        "num_agents_per_stage": 4,  # >= 2
-        "num_periods": 8,
-        "stage_names": ['retailer', 'wholesaler', 'distributor', 'manufacturer'],
-
-        "init_inventory_dist": ("uniform", 10, 15),  # constant/uniform/etc
-        "price_cost_dist": "uniform",                # constant/uniform/normal/etc
-        "lead_time_dist": ("uniform", 1, 5),         # constant/uniform
-        "prod_capacity_dist": ("uniform", 10, 20),   # constant/uniform
-        "demand_fn": ("constant_demand", 5),         # constant/functional
-        "holding_costs_dist": "constant",
-        "backlog_costs_dist": "constant",
-        "profit_rate_dist": ("uniform", 0, 1),
-
+        # LLM placement & toggles
         "llm_agents": [(i, j) for i in range(4) for j in range(4)],
+        "enable_graph_change": False,
+        "enable_price_change": False,
         "state_format": "base",
-        "enable_graph_change": True,
+        "env_no_backlog": False,
+
+        # Optional cap used by mas_model
+        "order_cap_ratio": 2.0,
     },
 }
 
 
 def get_env_configs(env_configs: dict):
     """
-    Convert a high-level config entry into a full environment config dict.
-    This keeps the original behavior and field names for backward compatibility.
+    Expand a high-level config entry into a full environment config dict.
+    Compatible with your current env.py expectations, including demand_fns_stage0.
     """
     save_dict_to_json(data=env_configs, save_path=env_configs['config_name'])
 
@@ -261,7 +142,7 @@ def get_env_configs(env_configs: dict):
         multiple=multiple
     )
 
-    # Optional multipliers (kept as before)
+    # Optional multipliers
     inv_mul = env_configs.get("init_inventory_multiplier", 1)
     ass_mul = env_configs.get("init_assets_multiplier", 1.0)
     if inv_mul != 1:
@@ -269,22 +150,30 @@ def get_env_configs(env_configs: dict):
     if ass_mul != 1.0:
         init_assets = (np.asarray(init_assets, dtype=float) * float(ass_mul)).astype(float)
 
-    # Demand function & names
+    # Demand function(s)
     demand_fn = Demand_fn(dist=env_configs["demand_fn"])
+    demand_fns_stage0 = None
+    try:
+        per_list = env_configs.get("demand_fn_stage0_list", None)
+        if isinstance(per_list, (list, tuple)) and len(per_list) == num_agents_per_stage:
+            demand_fns_stage0 = [Demand_fn(dist=tuple(spec)) for spec in per_list]
+    except Exception:
+        demand_fns_stage0 = None
+
     stage_names = env_configs["stage_names"]
     llm_agents = env_configs["llm_agents"]
     state_format = env_configs["state_format"]
 
-    # No-backlog shortcut for non-LLM agents (unchanged)
-    env_no_backlog = env_configs["env_no_backlog"]
+    # No-backlog shortcut for non-LLM agents (kept for compatibility)
+    env_no_backlog = env_configs.get("env_no_backlog", False)
     if env_no_backlog:
         for m in range(num_stages):
             for x in range(num_agents_per_stage):
                 if not ((m, x) in (llm_agents or [])):
                     init_inventories[m * num_agents_per_stage + x] = int(1e5)
 
-    enable_graph_change = env_configs["enable_graph_change"]
-    enable_price_change = env_configs["enable_price_change"]
+    enable_graph_change = env_configs.get("enable_graph_change", False)
+    enable_price_change = env_configs.get("enable_price_change", False)
 
     return {
         'num_stages': num_stages,
@@ -292,10 +181,11 @@ def get_env_configs(env_configs: dict):
         'num_agents_per_stage': num_agents_per_stage,
         "demand_dist": env_configs["demand_fn"][0],
 
-        'init_inventories': init_inventories,  # num_stages * num_agents_per_stage
+        'init_inventories': init_inventories,
         'init_assets': init_assets,
-        'lead_times': lead_times,               # num_stages * num_agents_per_stage * num_agents_per_stage
+        'lead_times': lead_times,
         'demand_fn': demand_fn,
+        'demand_fns_stage0': demand_fns_stage0,
         'prod_capacities': prod_capacities,
         'sale_prices': sale_prices,
         'order_costs': order_costs,
@@ -314,7 +204,7 @@ def get_env_configs(env_configs: dict):
         "enable_graph_change": enable_graph_change,
         "enable_price_change": enable_price_change,
 
-        # resurrection & reflection (kept)
+        # Resurrection / reflection toggles
         "enable_resurrection": env_configs.get("enable_resurrection", False),
         "max_bankruptcies": env_configs.get("max_bankruptcies", 5),
         "revive_policy": env_configs.get("revive_policy", "initial_assets_initinv_plus_backlog"),
@@ -327,11 +217,6 @@ def get_env_configs(env_configs: dict):
         ),
         "enable_bankruptcy_reflection": env_configs.get("enable_bankruptcy_reflection", True),
 
-        # order cap (for the new clipping logic in mas_model)
+        # Order cap for mas_model
         "order_cap_ratio": env_configs.get("order_cap_ratio", 2.0),
     }
-
-
-
-    
-

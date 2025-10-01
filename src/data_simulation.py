@@ -125,21 +125,22 @@ def generate_init_assets(dist: tuple, num_stages: int, num_agents_per_stage: int
     return assets.flatten()
 
 
-def generate_sup_dem_relations(type: str, num_stages: int, num_agents_per_stage: int, \
-                               num_suppliers: int=1, num_customers: int=1):
-    supply_relations = np.zeros((num_stages, num_agents_per_stage, num_agents_per_stage), dtype=int) # who are my suppliers
-    demand_relations = np.zeros((num_stages, num_agents_per_stage, num_agents_per_stage), dtype=int) # who are my customers
-    # Generate supply relations
+def generate_sup_dem_relations(type: str, num_stages: int, num_agents_per_stage: int,
+                               num_suppliers: int = 1, num_customers: int = 1):
+    supply_relations = np.zeros((num_stages, num_agents_per_stage, num_agents_per_stage), dtype=int)  # who are my suppliers
+    demand_relations = np.zeros((num_stages, num_agents_per_stage, num_agents_per_stage), dtype=int)  # who are my customers
+
     if type == "fix":
         for m in range(num_stages):
             for x in range(num_agents_per_stage):
-                if m == 0: 
+                if m == 0:
                     supply_relations[m][x][x] = 1
                     demand_relations[m][x][0] = 1
-                elif m == num_stages-1: 
+                elif m == num_stages - 1:
                     supply_relations[m][x][0] = 1
                 else:
                     supply_relations[m][x][x] = 1
+
     elif type == "random":
         for m in range(num_stages):
             for x in range(num_agents_per_stage):
@@ -147,18 +148,32 @@ def generate_sup_dem_relations(type: str, num_stages: int, num_agents_per_stage:
                     suppliers_idx = random_relations(n_cand=num_agents_per_stage, n_relation=num_suppliers)
                     supply_relations[m][x][suppliers_idx] = 1
                     demand_relations[m][x][0] = 1
-                elif m == num_stages-1:
+                elif m == num_stages - 1:
                     supply_relations[m][x][0] = 1
                 else:
                     suppliers_idx = random_relations(n_cand=num_agents_per_stage, n_relation=num_suppliers)
                     supply_relations[m][x][suppliers_idx] = 1
+
+
+    elif type == "full":
+        for m in range(num_stages):
+            for x in range(num_agents_per_stage):
+                if m == 0:
+                    supply_relations[m][x][:] = 1
+                    demand_relations[m][x][0] = 1
+                elif m == num_stages - 1:
+                    supply_relations[m][x][:] = 0
+                else:
+                    supply_relations[m][x][:] = 1
+
     else:
         raise AssertionError(f"{type} relation function is not implemented.")
-    
+
     # Infer demand relations from supply relations
-    demand_relations[1:, :, :] = np.transpose(supply_relations[:-1, :, :], (0, 2, 1)) 
-    
+    demand_relations[1:, :, :] = np.transpose(supply_relations[:-1, :, :], (0, 2, 1))
+
     return supply_relations, demand_relations
+
     
 
 def generate_holding_costs(dist: str, num_data: int, lb: int=1, ub: int=5, config_name: str="test"):
