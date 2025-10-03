@@ -66,9 +66,6 @@ env_configs = {
         "enable_price_change": False,
         "state_format": "base",
         "env_no_backlog": False,
-
-        # Optional cap used by mas_model
-        "order_cap_ratio": 2.0,
     },
 }
 

@@ -99,6 +99,7 @@ class InventoryManagementEnv(MultiAgentEnv):
         self.lead_time = self.lead_times
 
         self.demand_fn = demand_fn
+        self.demands_plan = None
         self.prod_capacities = np.array(prod_capacities, dtype=int).reshape(self.num_stages, self.num_agents_per_stage)
         self.max_production = int(np.max(self.prod_capacities))
 
@@ -182,6 +183,17 @@ class InventoryManagementEnv(MultiAgentEnv):
         self.sc_graph.reset_G()
         self.update_state()
 
+        T, A = self.num_periods, self.num_agents_per_stage
+        if self.demand_fns_stage0:
+            self.demands_plan = np.zeros((A, T + 1), dtype=int)
+            for a in range(A):
+                for tau in range(1, T + 1):
+                    self.demands_plan[a, tau] = int(self.demand_fns_stage0[a](tau))
+        else:
+            self.demands_plan = np.zeros(T + 1, dtype=int)
+            for tau in range(1, T + 1):
+                self.demands_plan[tau] = int(self.demand_fn(tau))
+
         return self.state_dict, {}
 
     def step(self, order_dict: dict, sup_dict: dict, dem_dict: dict, price_dict: dict):
@@ -220,15 +232,23 @@ class InventoryManagementEnv(MultiAgentEnv):
 
         # retail demand for this period
         # --- Retail demand for this period (supports per-retailer or legacy single demand) ---
-        if self.demand_fns_stage0:
-            # Per-retailer demand: one Demand_fn per stage-0 agent
-            for i in range(self.num_agents_per_stage):
-                self.demands[i, t] = int(self.demand_fns_stage0[i](t))
-            demand_vec0 = self.demands[:, t].astype(int)  # shape: (A,)
+        if isinstance(getattr(self, "demands_plan", None), np.ndarray):
+            if self.demands_plan.ndim == 2:
+                # per-retailer：A×(T+1)
+                self.demands[:, t] = self.demands_plan[:, t].astype(int)
+                demand_vec0 = self.demands[:, t].astype(int)
+            else:
+                # legacy：1×(T+1)
+                self.demands[t] = int(self.demands_plan[t])
+                demand_vec0 = np.full(self.num_agents_per_stage, int(self.demands[t]), dtype=int)
         else:
-            # Legacy: one global Demand_fn for all retailers
-            self.demands[t] = int(self.demand_fn(t))
-            demand_vec0 = np.full(self.num_agents_per_stage, int(self.demands[t]), dtype=int)
+            if self.demand_fns_stage0:
+                for i in range(self.num_agents_per_stage):
+                    self.demands[i, t] = int(self.demand_fns_stage0[i](t))
+                demand_vec0 = self.demands[:, t].astype(int)
+            else:
+                self.demands[t] = int(self.demand_fn(t))
+                demand_vec0 = np.full(self.num_agents_per_stage, int(self.demands[t]), dtype=int)
 
         # add arrivals to inventory (based on lead times)
         for m in range(self.num_stages):
@@ -476,14 +496,33 @@ class InventoryManagementEnv(MultiAgentEnv):
                 a = int(parts[3])
             except Exception:
                 s, a = -1, -1
+            try:
+                parts = stage_agent_id_name.split("_")
+                s = int(parts[1]);
+                a = int(parts[3])
+            except Exception:
+                s, a = -1, -1
+
             if s == 0:
                 if isinstance(self.demands, np.ndarray) and self.demands.ndim == 2:
-                    # per-retailer demand
-                    d_now = int(self.demands[a, t]) if (0 <= a < self.num_agents_per_stage) else 0
+                    d_prev = int(self.demands[a, t]) if (0 <= a < self.num_agents_per_stage) else 0
                 else:
-                    # legacy single demand
-                    d_now = int(self.demands[t]) if isinstance(self.demands, np.ndarray) else 0
-                p["demand"] = d_now  # mas_model.run_simulation reads this key
+                    d_prev = int(self.demands[t]) if isinstance(self.demands, np.ndarray) else 0
+
+                t_next = t + 1
+                if t_next <= self.num_periods and isinstance(getattr(self, "demands_plan", None), np.ndarray):
+                    if (self.demands_plan.ndim == 2) and (0 <= a < self.num_agents_per_stage):
+                        d_next = int(self.demands_plan[a, t_next])
+                    else:
+                        d_next = int(self.demands_plan[t_next])
+                else:
+                    d_next = 0
+
+                p["demand_prev"] = d_prev
+                p["demand_next"] = d_next
+                p["demand"] = d_next
+            if s == 0 and t <= 2:
+                print(f"[DBG] t={t} a={a} demand_prev={d_prev} demand_next={d_next}")
             parsed_state[stage_agent_id_name] = p
         return parsed_state
 

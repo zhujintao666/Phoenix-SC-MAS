@@ -174,6 +174,12 @@ def run_simulation(
     _resur_writer = csv.DictWriter(_resur_f, fieldnames=RESUR_COLS)
     _resur_writer.writeheader()
 
+    ORDERS_EDGE_PATH = os.path.join(dir_rec, "orders_per_edge.csv")
+    ORDERS_EDGE_COLS = ["period", "stage", "agent", "to_supplier", "qty"]
+    _orders_edge_f = open(ORDERS_EDGE_PATH, "w", newline="", encoding="utf-8")
+    _orders_edge_writer = csv.DictWriter(_orders_edge_f, fieldnames=ORDERS_EDGE_COLS)
+    _orders_edge_writer.writeheader()
+
     CLEAR_HISTORY = True
     WARMUP_PERIODS = 6
     MAX_MSG_CHARS = 4000
@@ -739,33 +745,6 @@ def run_simulation(
                     else:
                         final_vec = np.maximum(0, raw_vec).astype(int)
 
-                    try:
-                        cap_ratio = float(getattr(im_env, "order_cap_ratio", 2.0))
-                    except Exception:
-                        cap_ratio = 2.0
-
-                    # include backlog in base
-                    if stage_id == 0:
-                        need_base = int(cur_demand + cur_backlog)  # 零售商: 当前需求 + backlog
-                    else:
-                        need_base = int(downstream_need + cur_backlog)  # 上游: 下游需求 + backlog
-
-                    cap_total = int(max(0, np.floor(cap_ratio * max(0, need_base))))
-                    total_now = int(final_vec.sum())
-
-                    if total_now > cap_total:
-                        if cap_total <= 0:
-                            if cur_backlog > 0:
-                                final_vec[:] = 1
-                            else:
-                                final_vec = np.zeros_like(final_vec, dtype=int)
-                        else:
-                            scaled = np.floor(final_vec.astype(float) * (cap_total / float(total_now))).astype(int)
-                            remainder = int(cap_total - int(scaled.sum()))
-                            if remainder > 0:
-                                for idx in np.argsort(-final_vec)[:remainder]:
-                                    scaled[idx] += 1
-                            final_vec = scaled.astype(int)
 
                     total_chat_summary += (
                         f"=== {key} | period={period} ===\n"
@@ -833,6 +812,22 @@ def run_simulation(
                     action_price_dict.setdefault(key, 0)
                     action_dem_dict.setdefault(key, 0)
 
+        for s in range(num_stages):
+            for a in range(num_agents_per_stage):
+                k = f"stage_{s}_agent_{a}"
+                vec = action_order_dict.get(k, np.zeros(num_agents_per_stage, dtype=int))
+                vec = np.asarray(vec, dtype=int).reshape(-1)
+                for sup in range(num_agents_per_stage):
+                    q = int(vec[sup]) if sup < vec.size else 0
+                    if q > 0:
+                        _orders_edge_writer.writerow({
+                            "period": period,
+                            "stage": int(s),
+                            "agent": int(a),
+                            "to_supplier": int(sup),
+                            "qty": int(q),
+                        })
+        _orders_edge_f.flush()
         assets_start_mat = np.asarray(im_env.assets, dtype=float).copy()
         next_states, rewards, terminations, truncations, infos = im_env.step(
             order_dict=action_order_dict,
@@ -872,9 +867,20 @@ def run_simulation(
 
                 if s == 0:
                     try:
-                        demand_t = int(getattr(im_env, "demands")[t_end])
+                        dem_arr = getattr(im_env, "demands")
+                        if isinstance(dem_arr, np.ndarray) and dem_arr.ndim == 2:
+                            # per-retailer demand
+                            demand_t = int(dem_arr[a, t_end])
+                        else:
+                            # legacy global demand
+                            demand_t = int(dem_arr[t_end])
                     except Exception:
-                        demand_t = 0
+                        demand_t = int(
+                            next_state_dict.get(k, {}).get(
+                                "demand_prev",
+                                next_state_dict.get(k, {}).get("demand", 0)
+                            )
+                        )
                 else:
                     demand_t = 0
                     for down_agent in range(num_agents_per_stage):
@@ -1313,6 +1319,12 @@ def run_simulation(
     except Exception as e:
         print("[WARN] close resurrection file failed:", e)
 
+    try:
+        _orders_edge_f.close()
+        print("[Saved]", ORDERS_EDGE_PATH)
+    except Exception as e:
+        print("[WARN] close orders_edge file failed:", e)
+
     saved_bankruptcy = False
     if hasattr(im_env, "bankruptcy_log") and len(getattr(im_env, "bankruptcy_log", [])) > 0:
         try:
@@ -1419,4 +1431,3 @@ def run_simulation(
     if return_meta:
         return {"episode_reward": float(episode_reward), "api_cost": float(api_cost), "run_dir": run_dir}
     return float(episode_reward)
-
