@@ -13,7 +13,7 @@ from autogen import ConversableAgent
 
 np.random.seed(30)
 DRAW_FIGS = False
-NUM_EPISODES = 3
+NUM_EPISODES = 1
 ENV_NAME = "msbs44"
 USE_RANDOM_ENV_SEED = True
 enable_memory = True

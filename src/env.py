@@ -194,6 +194,16 @@ class InventoryManagementEnv(MultiAgentEnv):
             for tau in range(1, T + 1):
                 self.demands_plan[tau] = int(self.demand_fn(tau))
 
+        print("[VIZDBG][env.reset] "
+              f"inv_shape={self.inventories.shape} "
+              f"orders_shape={self.orders.shape} "
+              f"arrivals_shape={self.arriving_orders.shape} "
+              f"sales_shape={self.sales.shape} "
+              f"backlogs_shape={self.backlogs.shape} "
+              f"assets_shape={self.assets.shape}")
+        print("[VIZDBG][env.reset] supply_relations shape snapshot:",
+              np.asarray(self.supply_relations, dtype=object).shape)
+
         return self.state_dict, {}
 
     def step(self, order_dict: dict, sup_dict: dict, dem_dict: dict, price_dict: dict):
@@ -481,6 +491,10 @@ class InventoryManagementEnv(MultiAgentEnv):
         if state_dict is None:
             state_dict = self.state_dict
 
+        try:
+            print(f"[VIZDBG][env.parse_state] period={self.period}, items={len(state_dict)}")
+        except Exception:
+            print("[VIZDBG][env.parse_state] period=? (state_dict missing)")
         parsed_state = {}
         t = self.period  # current period
 

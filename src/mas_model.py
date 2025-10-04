@@ -1,7 +1,8 @@
 # src/mas_model.py
 from typing import List, Dict, Any
 from pathlib import Path  # for debug file path handling
-import os, csv, re, time, json, hashlib
+import os, csv, re, time, json, hashlib, sys
+sys.path.append('src')
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -13,6 +14,21 @@ except Exception:
 
 from memory_module import ExperienceMemory, MemoryConfig
 
+import os, inspect, importlib.util
+UTILS_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "utils.py"))
+
+def _load_visualize_state():
+    spec = importlib.util.spec_from_file_location("project_utils_viz", UTILS_PATH)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    print("[viz][LOAD] utils from:", UTILS_PATH)
+    try:
+        print("[viz][LOAD] visualize_state from:", inspect.getsourcefile(mod.visualize_state))
+    except Exception:
+        pass
+    return mod.visualize_state
+
+_visualize_state = _load_visualize_state()
 
 def _sanitize_llm_config(cfg: dict) -> dict:
     if not isinstance(cfg, dict):
@@ -430,10 +446,29 @@ def run_simulation(
     bankrupt_counts = np.zeros((S, A), dtype=int)
 
     try:
-        from utils import visualize_state
-        visualize_state(env=im_env, rewards={}, t=-1, save_prefix=os.path.join(config_name, ts, "viz"))
-    except Exception:
-        pass
+        print("[viz][INIT] calling visualize_state...")
+        ret = _visualize_state(env=im_env, rewards={}, t=-1, save_prefix=dir_viz)
+        print("[viz][INIT][OK]", ret)
+    except Exception as e:
+        print("[viz][INIT][ERR]", repr(e))
+
+        try:
+            from os.path import abspath, exists, getsize, join
+            out_dir_abs = abspath(dir_viz)
+            csv_abs = abspath(ret.get("csv", "")) if isinstance(ret, dict) else ""
+            imgs_abs = [abspath(p) for p in (ret.get("imgs", []) if isinstance(ret, dict) else [])]
+            print(f"[viz][PERIOD][OK] t={period} out_dir={out_dir_abs}")
+            print(
+                f"[viz][PERIOD][OK] CSV: {csv_abs} exists={exists(csv_abs)} size={getsize(csv_abs) if exists(csv_abs) else -1}")
+            for p in imgs_abs:
+                print(f"[viz][PERIOD][OK] IMG: {p} exists={exists(p)} size={getsize(p) if exists(p) else -1}")
+            if not exists(csv_abs) or any(not exists(p) for p in imgs_abs):
+                print("[viz][PERIOD][ERROR] Expected files missing; check cwd and exceptions above.")
+        except Exception as _e:
+            print("[viz][PERIOD][CHECK-ERR]", repr(_e))
+
+    except Exception as e:
+        print("[viz][INIT][ERR]", repr(e))
 
     mem = ExperienceMemory(
         num_stages=num_stages,
@@ -1261,10 +1296,18 @@ def run_simulation(
         print(f"round_reward_sum = {round_reward_sum}")
 
         try:
-            from utils import visualize_state
-            visualize_state(env=im_env, rewards=rewards, t=period, save_prefix=os.path.join(config_name, ts, "viz"))
-        except Exception:
-            pass
+            print(f"[viz][PERIOD] t={period} calling visualize_state...")
+            ret = _visualize_state(env=im_env, rewards=rewards, t=period, save_prefix=dir_viz)
+            # 可选：核验文件是否真的写出
+            from os.path import abspath, exists, getsize
+            print(f"[viz][PERIOD][OK] t={period} out_dir={abspath(dir_viz)}")
+            csv_path = ret.get("csv", "")
+            print(
+                f"[viz][PERIOD][OK] CSV: {abspath(csv_path)} exists={exists(csv_path)} size={getsize(csv_path) if exists(csv_path) else -1}")
+            for p in ret.get("imgs", []):
+                print(f"[viz][PERIOD][OK] IMG: {abspath(p)} exists={exists(p)} size={getsize(p) if exists(p) else -1}")
+        except Exception as e:
+            print("[viz][PERIOD][ERR]", repr(e))
 
         try:
             _ = _write_chat_summary(period, total_chat_summary, round_reward_sum)

@@ -19,7 +19,7 @@ env_configs = {
         "num_init_suppliers": 2,
         "num_init_customers": 2,
         "num_agents_per_stage": 4,
-        "num_periods": 50,
+        "num_periods": 10,
         "num_stages": 4,
         "stage_names": ['retailer', "wholesaler", 'distributor', 'manufacturer'],
 
