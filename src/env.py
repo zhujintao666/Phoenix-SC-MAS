@@ -60,6 +60,8 @@ class InventoryManagementEnv(MultiAgentEnv):
         init_assets: np.array = None,
         demand_fns_stage0: list | None = None,
         init_seed: int = 0,
+        top_virtual_lead_time: int = 1,
+        top_virtual_unit_cost: float = 0.0,
     ):
         super().__init__()
 
@@ -119,6 +121,8 @@ class InventoryManagementEnv(MultiAgentEnv):
         self.enable_price_change = enable_price_change
         self.init_assets = np.array(init_assets, dtype=float).reshape(self.num_stages, self.num_agents_per_stage)
         self.assets = self.init_assets.copy()
+        self.top_virtual_lead_time = int(top_virtual_lead_time)
+        self.top_virtual_unit_cost = float(top_virtual_unit_cost)
 
         # ---- runtime tensors ----
         self.period = 0
@@ -223,7 +227,6 @@ class InventoryManagementEnv(MultiAgentEnv):
         # advance one period
         self.period += 1
         t = self.period
-        M = self.num_stages
 
         # start-of-period inventory
         current_inventories = self.inventories[:, :, t - 1].copy()
@@ -271,17 +274,24 @@ class InventoryManagementEnv(MultiAgentEnv):
                     if t >= lt:
                         current_inventories[m][i] += self.arriving_orders[m, i, j, t - lt]
 
+        Ltop = self.top_virtual_lead_time
+        M, A = self.num_stages, self.num_agents_per_stage
+        virtual_inbound_qty = np.zeros(A, dtype=int)  # keep for cost accounting
+        if Ltop >= 0 and t >= Ltop:
+            # orders placed by stage M-1 at time (t - Ltop), summed over "phantom suppliers" slots
+            # shape: orders[M-1, agent, :, time]
+            past_orders = self.orders[M - 1, :, :, t - Ltop]  # (A, A)
+            virtual_inbound_qty = past_orders.sum(axis=1).astype(int)  # per top agent
+            # add virtual raw-material arrivals into on-hand inventory at top stage
+            current_inventories[M - 1] += virtual_inbound_qty
         # total requested orders each supplier receives this period
         cum_req_orders = np.sum(self.orders[:, :, :, t], axis=1)  # shape: (stage, agent)
 
         # feasible fulfilled orders (bounded by capacity & on-hand inventory); top stage fully fulfills
-        fulfilled_orders = np.zeros((self.num_stages, self.num_agents_per_stage), dtype=int)
-        fulfilled_orders[:-1] = np.minimum(
-            np.minimum(self.backlogs[1:, :, t - 1] + cum_req_orders[:-1], current_inventories[1:]),
-            self.prod_capacities[1:]
-        )
-        # top stage: assumed can fulfill all
-        fulfilled_orders[M - 1] = cum_req_orders[M - 1]
+        fulfilled_orders = np.minimum(
+            np.minimum(self.backlogs[:, :, t - 1] + cum_req_orders, current_inventories),
+            self.prod_capacities
+        ).astype(int)
 
         # distribute fulfillment to downstream edges proportionally
         fulfilled_rates = (fulfilled_orders + 1e-10) / (cum_req_orders + 1e-10)
@@ -343,6 +353,8 @@ class InventoryManagementEnv(MultiAgentEnv):
                         qty = int(self.arriving_orders[m, i, j, idx])
                         total_cost += qty * int(self.order_costs[m][j])
                 order_costs_now[m, i] = total_cost
+        if self.top_virtual_unit_cost != 0.0:
+            order_costs_now[M - 1, :] += (virtual_inbound_qty * self.top_virtual_unit_cost).astype(int)
 
         self.profits[:, :, t] = (
                 self.sale_prices * self.sales[:, :, t]
@@ -504,18 +516,16 @@ class InventoryManagementEnv(MultiAgentEnv):
             # self.demands can be:
             #   - shape (A, T+1) when per-retailer demand_fns_stage0 is used
             #   - shape (T+1,) for legacy single-demand shared by all retailers
+            # --- OPTIONAL: expose virtual-top info to stage M-1 agents ---
             try:
                 parts = stage_agent_id_name.split("_")
-                s = int(parts[1]);
-                a = int(parts[3])
+                s = int(parts[1]); a = int(parts[3])
             except Exception:
                 s, a = -1, -1
-            try:
-                parts = stage_agent_id_name.split("_")
-                s = int(parts[1]);
-                a = int(parts[3])
-            except Exception:
-                s, a = -1, -1
+
+            if s == (self.num_stages - 1):
+                p["top_virtual_lead_time"] = self.top_virtual_lead_time
+                p["top_virtual_unit_cost"] = self.top_virtual_unit_cost
 
             if s == 0:
                 if isinstance(self.demands, np.ndarray) and self.demands.ndim == 2:
@@ -634,5 +644,7 @@ def env_creator(env_config):
         init_assets=env_config['init_assets'],
         agent_profiles=agent_profiles,
         sc_graph=sc_graph,
+        top_virtual_lead_time=env_config.get("top_virtual_lead_time", 1),
+        top_virtual_unit_cost=env_config.get("top_virtual_unit_cost", 0.0),
     )
 

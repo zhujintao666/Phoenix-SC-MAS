@@ -19,7 +19,7 @@ env_configs = {
         "num_init_suppliers": 2,
         "num_init_customers": 2,
         "num_agents_per_stage": 4,
-        "num_periods": 100,
+        "num_periods": 10,
         "num_stages": 4,
         "stage_names": ['retailer', "wholesaler", 'distributor', 'manufacturer'],
 
@@ -34,6 +34,11 @@ env_configs = {
         "revive_inventory": 50,
         "reset_suppliers_on_revive": True,
         "stop_on_exhausted_resurrections": True,
+
+        # Lead time L_top: quantity requested at t arrives to M-1 inventory at t+L_top.
+        "top_virtual_lead_time": 1,
+        # Unit cost of the virtual inbound (raw material). Set 0.0 if you don't want to charge it.
+        "top_virtual_unit_cost": 0.0,
 
         # Distributions
         "init_inventory_dist": ("uniform", 10, 15),
@@ -213,7 +218,6 @@ def get_env_configs(env_configs: dict):
             "enable_regular_reflection_with_resurrection", False
         ),
         "enable_bankruptcy_reflection": env_configs.get("enable_bankruptcy_reflection", True),
-
-        # Order cap for mas_model
-        "order_cap_ratio": env_configs.get("order_cap_ratio", 2.0),
+        "top_virtual_lead_time": env_configs.get("top_virtual_lead_time", 1),
+        "top_virtual_unit_cost": env_configs.get("top_virtual_unit_cost", 0.0),
     }

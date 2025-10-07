@@ -281,6 +281,11 @@ def run_simulation(
 
     def _eff_lead_time(env, stage_id, agent_id, sup_vec):
         try:
+            if stage_id == env.num_stages - 1:
+                return int(getattr(env, "top_virtual_lead_time", 1))
+        except Exception:
+            pass
+        try:
             lt = getattr(env, "lead_time", None)
             if lt is None:
                 return 1
@@ -674,6 +679,13 @@ def run_simulation(
                         f"- inbound_next_L_total={inbound_total}, inbound_vec={inbound_vec.tolist()}",
                         f"- recent_orders_totals t-1..t-{L_eff}: {last_totals}",
                     ]
+
+                    if stage_id == num_stages - 1:
+                        env_ctx.append(
+                            f"- virtual_upstream: lead_time={getattr(im_env, 'top_virtual_lead_time', 1)}, "
+                            f"unit_cost={getattr(im_env, 'top_virtual_unit_cost', 0.0)}"
+                        )
+                        env_ctx.append("- Note: your inbound is produced virtually (no real suppliers).")
 
                     rules_ctx = []
                     if enable_memory and enable_knn_suggest and period >= WARMUP_PERIODS:

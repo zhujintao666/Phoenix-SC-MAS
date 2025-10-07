@@ -17,9 +17,12 @@ import matplotlib.pyplot as plt
 import dgl  # kept if other modules rely on it
 
 
-# ------------------------------
-# Basic I/O helpers
-# ------------------------------
+def _infer_num_stages_agents(ep_dir: str | Path) -> tuple[int, int]:
+    ep_dir = Path(ep_dir).resolve()
+    obs = pd.read_csv(ep_dir / "records" / "demand_inventory_backlog_assets.csv")
+    M = int(obs["stage"].max()) + 1
+    A = int(obs["agent"].max()) + 1
+    return M, A
 
 def _resolve_out_dir(save_prefix: str) -> str:
     """
@@ -319,7 +322,7 @@ def visualize_state(env, rewards: dict, t: int, save_prefix: str):
         print("[viz][ERR] building dataframe failed:\n" + traceback.format_exc())
 
     try:
-        df = df.groupby(by=["stage", "agent_idx"]).apply(lambda x: x).reset_index(drop=True)
+        df = df.sort_values(["stage", "agent_idx"]).reset_index(drop=True)
     except Exception:
         print("[viz][WARN] groupby reset failed; continue without it")
 
@@ -656,6 +659,11 @@ def _load_orders_df(ep_dir: str | Path) -> pd.DataFrame:
     # Keep only cross-stage buyer->immediate-upstream edges
     df = df[df["to_stage"] == df["from_stage"] + 1].copy()
 
+    try:
+        M, A = _infer_num_stages_agents(ep_dir)
+        df = df[df["to_stage"] < M].copy()
+    except Exception:
+        pass
     # Keep only positive orders
     df = df[df["order"] > 0].copy()
 
@@ -963,3 +971,4 @@ def summarize_order_split_by_buyer(ep_dir: str | Path) -> pd.DataFrame:
     print(f"[RULE] Buyer-level split summary saved -> {out_csv}")
 
     return episode_distinct
+
