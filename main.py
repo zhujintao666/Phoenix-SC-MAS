@@ -1,4 +1,4 @@
-import sys, os
+import sys, os, re
 sys.path.append('src')
 import numpy as np
 from tqdm.auto import tqdm
@@ -10,17 +10,24 @@ import utils
 from mas_model import create_agents, run_simulation
 from utils import get_demand_description, clear_dir
 from autogen import ConversableAgent
+from pathlib import Path
+from src.utils import (
+    plot_episode_stage_charts,
+    render_all_period_graphs_from_csv,
+    compute_and_save_degree_stats_from_txn
+)
 
 np.random.seed(30)
-DRAW_FIGS = False
+
+# DRAW_FIGS now only controls whether we keep per-period CSV via visualize_state;
+# the legacy full graphs are removed inside visualize_state, so True is safe.
+DRAW_FIGS = True
+
 NUM_EPISODES = 1
 ENV_NAME = "msbs44"
 USE_RANDOM_ENV_SEED = True
 enable_memory = True
 enable_knn_suggest = True
-
-if not DRAW_FIGS:
-    utils.visualize_state = lambda *args, **kwargs: None
 
 config_list = llm_config_list
 
@@ -86,7 +93,7 @@ for r in tqdm(range(NUM_EPISODES), desc="Episodes"):
         run_tag=f"{run_id}-ep{r:03d}",
         enable_memory=enable_memory,
         enable_knn_suggest=enable_knn_suggest,
-        plot_after=True,
+        plot_after=True,  # safe: visualize_state no longer draws legacy full graphs
         stop_on_first_bankruptcy=True,
         enable_resurrection=env_config_i["enable_resurrection"],
         max_bankruptcies=env_config_i["max_bankruptcies"],
@@ -104,8 +111,36 @@ for r in tqdm(range(NUM_EPISODES), desc="Episodes"):
     )
 
     rewards.append(float(reward))
+
+    # Episode output dir (consistent with run_simulation's layout)
+    ep_dir = Path(f"results/{ENV_NAME}/{run_id}/{run_id}-ep{r:03d}")
+
+    # 1) Keep yesterday's stage charts (uses demand_inventory_backlog_assets.csv)
+    plot_episode_stage_charts(ep_dir)
+
+    # 2) NEW: draw per-period transaction graphs from records/orders_per_edge.csv
+    #    This will render one PNG per period under ep_dir/viz_txn/
+    render_all_period_graphs_from_csv(
+        ep_dir=ep_dir,
+        dpi=200
+    )
+
+    # 3) NEW: compute degree stats from true trades and save CSV + histogram
+    compute_and_save_degree_stats_from_txn(
+        ep_dir=ep_dir,
+        dpi=200
+    )
     print(f"[EPISODE {r}] reward = {reward}")
 
+    # 4) Rule checks: did any buyer place orders to >3 suppliers in the same period?
+    viol = list_order_split_violations(ep_dir, max_suppliers=3)
+    summary = summarize_order_split_by_buyer(ep_dir)
+
+    if not viol.empty:
+        print("[RULE] Violations (first 10 rows):")
+        print(viol.head(10))
+    else:
+        print("[RULE] No per-period >3-supplier violations.")
 mean_reward = float(np.mean(rewards)) if len(rewards) else 0.0
 std_reward = float(np.std(rewards)) if len(rewards) else 0.0
 
@@ -125,3 +160,7 @@ try:
     print(f"[Saved] {os.path.join(run_dir, 'summary.txt')}")
 except Exception as e:
     print("[WARN] failed to save run summary:", e)
+
+
+
+print("[RULE] Buyer-level summary saved.")
